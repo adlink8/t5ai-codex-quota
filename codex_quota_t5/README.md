@@ -116,13 +116,17 @@ echo n | tyutool_cli.exe write -d t5ai -p COM12 -f <path>\codex_quota_QIO_1.0.0.
 
 ### 5. PC 端启动 Mosquitto + 桥接服务器
 
+双击 `bridge_server\start_bridge.bat` 一键启动（自动启动 Mosquitto + 桥接服务），或手动启动：
+
 ```powershell
-# 启动 Mosquitto broker（需 remote 配置允许局域网连接）
-mosquitto.exe -c mosquitto_remote.conf
+# 启动 Mosquitto broker
+mosquitto.exe -c bridge_server\mosquitto.conf -d
 
 # 启动桥接服务器
-python codex_bridge_server.py
+python bridge_server\codex_bridge_server.py --port 5678
 ```
+
+停止服务：双击 `bridge_server\stop_bridge.bat`。
 
 ## MQTT 功能说明
 

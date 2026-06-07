@@ -2,71 +2,81 @@
 
 ## What This Is
 
-TuYa is a local TuyaOpen/T5AI-Board experiment workspace. Its current concrete app is `codex_quota_t5`, a firmware port that shows Codex quota data on the T5AI-Board LCD through WiFi and a PC bridge server.
+TuYa is a local TuyaOpen/T5AI-Board workspace. Its main app is `codex_quota_t5`, a firmware that displays Codex quota data on the T5AI-Board 480x320 LCD through MQTT push + HTTP fallback dual-channel, with automatic reconnection and exponential backoff.
 
-The workspace also keeps Tuya IoT research notes, T5AI-Board hardware references, and local flashing binaries so future firmware experiments can start from known context instead of rediscovery.
+The workspace also includes a PC bridge server (`bridge_server/`), Tuya IoT research notes, hardware references, and a firmware archive.
+
+**GitHub:** https://github.com/adlink8/t5ai-codex-quota
 
 ## Core Value
 
-Make the T5AI-Board reliably display useful local AI/tooling status from a PC bridge with a repeatable build, flash, and debug workflow.
+Make the T5AI-Board reliably display Codex quota status via MQTT + HTTP fallback, with a repeatable build, flash, and debug workflow.
 
 ## Requirements
 
 ### Validated
 
-- ✓ `codex_quota_t5` builds successfully inside WSL TuyaOpen SDK at `/home/li/TuyaOpen/apps/codex_quota` — Phase 1
-- ✓ WiFi credentials and bridge endpoint are Kconfig/app-config driven without committed default WiFi secrets — Phase 2
+- ✓ `codex_quota_t5` builds inside WSL TuyaOpen SDK — Phase 1
+- ✓ WiFi + HTTP polling + LVGL UI working on hardware — Phase 2
+- ✓ MQTT connect, subscribe, receive quota updates — Phase 3
+- ✓ Disconnect detection with 2-second debounce — Phase 3
+- ✓ Exponential backoff reconnection (1s → 60s cap) — Phase 3
+- ✓ HTTP fallback auto-switch when MQTT disconnected — Phase 3
+- ✓ Broker recovery auto-reconnect within ~60s — Phase 3
+- ✓ SDK socket fd guard prevents infinite error loop — Phase 3
 
 ### Active
 
-- [ ] Flash a generated firmware image to T5AI-Board using `tos.py flash` or the bundled `tyutool` tools.
-- [ ] Verify the LCD UI renders quota state, offline state, and refresh behavior on real hardware.
-- [ ] Document one-line setup/build/flash/debug commands for future runs.
+- [ ] 4-hour stability test: board running unattended with periodic broker restart
 
 ### Out of Scope
 
-- Full Tuya cloud product lifecycle - current workspace focuses on local firmware experiments, not production cloud onboarding.
-- Mobile app or MiniApp panel development - LCD firmware and local bridge integration are the current priority.
-- OTA deployment and mass production tooling - serial flashing is enough for the prototype stage.
-- Rewriting the PC bridge server - this app expects to reuse the existing `codex_bridge_server.py` from the companion project.
+- Full Tuya cloud product lifecycle — local firmware experiments only
+- Mobile app or MiniApp development
+- OTA deployment and mass production tooling
+- Rewriting the PC bridge server from scratch
+
+## Architecture
+
+```
+T5AI-Board ←──MQTT subscribe─── Mosquitto (PC:1883) ←──MQTT publish─── Bridge Server
+  10.13.220.137                                              ↕ HTTP API
+                                                        Codex/ChatGPT quota source
+```
+
+- **Primary channel (MQTT):** Board subscribes to `codex/quota`, bridge publishes retain messages
+- **Fallback channel (HTTP):** Auto-switches to HTTP GET polling when MQTT disconnected
+- **Reconnection:** Exponential backoff 1s→60s, full client destroy/recreate cycle
+- **Debounce:** 2-second window suppresses repeated disconnect callbacks
 
 ## Context
 
-- Target hardware: Tuya T5AI-Board using the T5-E1-IPEX module.
-- App stack: TuyaOpen, C/C++, CMake, LVGL, Tuya TAL WiFi/thread/system APIs, cJSON, HTTP polling.
-- Current app path: `codex_quota_t5`.
-- Current binary/tools path: `烧写工具`.
-- Current architecture: T5AI-Board -> WiFi LAN -> PC bridge server -> ChatGPT/Codex quota source.
-- Current UI intent: 480x320 LCD, black background, ring indicators for primary/secondary quota windows, color thresholding, offline status.
-- Known hard-coded value: `BRIDGE_HOST` in `codex_quota_t5/src/tuya_main.c` is currently `192.168.1.109`.
-
-## Constraints
-
-- **Hardware**: Requires T5AI-Board or compatible T5 target - runtime behavior cannot be fully validated on the Windows host alone.
-- **SDK**: Build requires TuyaOpen and `tos.py`; this folder is an app workspace, not a full SDK checkout.
-- **Network**: Device and PC bridge must be on the same LAN; bridge IP/port/path must match firmware config.
-- **Display**: UI depends on LVGL and board display initialization order.
-- **Safety**: Do not run destructive cleanup or overwrite parent workspace files without explicit confirmation.
+- **Hardware:** Tuya T5AI-Board, BK7258 (ARM Cortex-M33F @480MHz), 16MB PSRAM, 8MB Flash, 480x320 RGB LCD
+- **SDK:** TuyaOpen (C/C++, CMake, Ninja, LVGL)
+- **Build env:** WSL Ubuntu-D at `/home/li/TuyaOpen`
+- **Flash:** tyutool_cli.exe, COM12 @ 921600 baud, debug COM11 @ 460800 baud
+- **Bridge:** Python HTTP server (port 5678) + Mosquitto MQTT (port 1883)
+- **Network:** PC WiFi hotspot, board on same subnet
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Keep `codex_quota_t5` as a TuyaOpen app folder | Matches TuyaOpen app-copy workflow and current README | Pending |
-| Track planning docs in `.planning` | Keeps future GSD tasks grounded in local project state | ✓ Good |
-| Treat bridge server as external dependency | Avoids duplicating companion project logic | Pending |
-| Use coarse roadmap phases | Firmware work has a small number of high-value validation gates | ✓ Good |
-| Use WSL SDK at `/home/li/TuyaOpen` | Actual local SDK path provided by user and verified by build | ✓ Good |
-| Keep WiFi credentials out of defaults | Prevents accidental secret commits and forces environment-specific config | ✓ Good |
+| Use QIO format for flashing | UA/UG lack bootloader, cause black screen | ✓ Verified |
+| Socket fd guard in SDK wrapper | Prevents infinite error loop on broken socket | ✓ Verified |
+| Disconnect debounce (2s window) | Suppresses callback storm from rapid TCP teardown | ✓ Verified |
+| Full client destroy on reconnect | Avoids stale state in TuyaOpen MQTT wrapper | ✓ Verified |
+| Bridge server in `bridge_server/` | Self-contained with start/stop scripts and mosquitto.conf | ✓ Done |
+| Firmware archive categorized | Historical builds preserved by phase | ✓ Done |
+| WiFi credentials out of defaults | Prevents accidental secret commits | ✓ Good |
+| Use WSL SDK for builds | Windows SDK not available, WSL path proven | ✓ Good |
 
-## Evolution
+## Constraints
 
-After each phase:
-
-1. Move verified requirements to Validated.
-2. Update Active requirements when hardware findings change scope.
-3. Record build, flash, and runtime decisions in Key Decisions.
-4. Keep paths and commands accurate for the current local machine.
+- **Hardware required:** Runtime behavior cannot be validated without T5AI-Board
+- **SDK dependency:** Build requires full TuyaOpen checkout at `~/TuyaOpen`
+- **Network:** Device and PC must be on same LAN
+- **SDK modification:** `mqtt_client_wrapper.c` has local patch (socket fd guard) not upstreamed
 
 ---
-*Last updated: 2026-06-07 after Phase 2 configuration verification*
+*Last updated: 2026-06-07 after Phase 3 completion, firmware archive, and GitHub push*
