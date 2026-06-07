@@ -1,0 +1,24 @@
+# Flash tools and firmware binaries
+*.log
+*.bin
+烧写工具/
+
+# Firmware archive (large binaries)
+firmware_archive/
+
+# Build outputs
+build/
+dist/
+out/
+tuya_kconfig.h
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Local editor/runtime noise
+.DS_Store
+Thumbs.db
+.vscode/
+*.bak

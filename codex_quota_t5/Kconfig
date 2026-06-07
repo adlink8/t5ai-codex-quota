@@ -1,0 +1,39 @@
+mainmenu "Codex Quota Monitor"
+
+config APP_NAME
+    string "App Name"
+    default "codex_quota"
+
+menu "WiFi Configuration"
+    config WIFI_SSID
+        string "WiFi SSID"
+        default ""
+
+    config WIFI_PASSWORD
+        string "WiFi Password"
+        default ""
+endmenu
+
+menu "Bridge Server"
+    config BRIDGE_HOST
+        string "Bridge server IP"
+        default "192.168.1.109"
+
+    config BRIDGE_PORT
+        int "Bridge server port"
+        default 5678
+
+    config BRIDGE_PATH
+        string "Bridge server quota path"
+        default "/quota"
+endmenu
+
+menu "MQTT Configuration"
+    config MQTT_HOST
+        string "MQTT broker IP"
+        default ""
+
+    config MQTT_PORT
+        int "MQTT broker port"
+        default 1883
+endmenu
