@@ -22,3 +22,20 @@ __pycache__/
 Thumbs.db
 .vscode/
 *.bak
+
+# Sensitive files
+.env
+.env.*
+*.secret
+auth.json
+.codex/
+
+# Runtime state
+*.pid
+runtime/
+data/quota_history.jsonl
+*.local
+
+# Python venv
+.venv/
+venv/

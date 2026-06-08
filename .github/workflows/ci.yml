@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  python-check:
+    name: Python Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile-check bridge_server Python files
+        run: |
+          errors=0
+          for f in bridge_server/*.py; do
+            if [ -f "$f" ]; then
+              echo "Checking $f ..."
+              python -m py_compile "$f" || errors=$((errors + 1))
+            fi
+          done
+          if [ "$errors" -gt 0 ]; then
+            echo "::error::$errors Python file(s) failed syntax check"
+            exit 1
+          fi
+          echo "All Python files passed syntax check."
+
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Scan for common secret patterns
+        run: |
+          found=0
+
+          # Check for private key files
+          if find . -name "*.pem" -not -path "./.git/*" | grep -q .; then
+            echo "::warning::Found .pem file(s) in repository"
+            find . -name "*.pem" -not -path "./.git/*"
+            found=1
+          fi
+
+          # Check for auth.json files
+          if find . -name "auth.json" -not -path "./.git/*" | grep -q .; then
+            echo "::warning::Found auth.json file(s) in repository"
+            find . -name "auth.json" -not -path "./.git/*"
+            found=1
+          fi
+
+          # Check for .env files with actual values
+          if find . -name ".env" -not -path "./.git/*" -not -path "./.venv/*" | grep -q .; then
+            echo "::warning::Found .env file(s) in repository"
+            find . -name ".env" -not -path "./.git/*" -not -path "./.venv/*"
+            found=1
+          fi
+
+          # Check for hardcoded passwords in source code
+          if grep -rn --include="*.py" --include="*.c" --include="*.h" --include="*.bat" --include="*.yml" \
+            -iE '(password|passwd|pwd|secret|api_key)\s*[=:]\s*["\x27][^"\x27]+["\x27]' \
+            --exclude-dir=.git --exclude-dir=.venv --exclude-dir=node_modules .; then
+            echo "::warning::Found potential hardcoded passwords in source code"
+            found=1
+          fi
+
+          # Check for private key blocks
+          if grep -rn --include="*.py" --include="*.c" --include="*.h" --include="*.json" --include="*.txt" \
+            "BEGIN.*PRIVATE KEY" \
+            --exclude-dir=.git --exclude-dir=.venv .; then
+            echo "::warning::Found private key content in source files"
+            found=1
+          fi
+
+          if [ "$found" -eq 1 ]; then
+            echo "::error::Secret scan found potential issues. Review the warnings above."
+            exit 1
+          fi
+
+          echo "Secret scan passed. No common secret patterns detected."
+
+  markdown-check:
+    name: Markdown Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify key documentation files exist
+        run: |
+          required_files=(
+            "README.md"
+            "docs/configuration.md"
+            "codex_quota_t5/README.md"
+          )
+          missing=0
+          for f in "${required_files[@]}"; do
+            if [ -f "$f" ]; then
+              size=$(wc -c < "$f")
+              if [ "$size" -lt 50 ]; then
+                echo "::warning::$f exists but is suspiciously small ($size bytes)"
+                missing=$((missing + 1))
+              else
+                echo "OK: $f ($size bytes)"
+              fi
+            else
+              echo "::error::Required documentation file missing: $f"
+              missing=$((missing + 1))
+            fi
+          done
+          if [ "$missing" -gt 0 ]; then
+            exit 1
+          fi
+          echo "All required documentation files present."

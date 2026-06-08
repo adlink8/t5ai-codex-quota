@@ -16,10 +16,9 @@ target_include_directories(${EXAMPLE_LIB} PUBLIC
     ${APP_PATH}/src
 )
 
-# MQTT broker config + LVGL fonts
+# MQTT config comes from Kconfig only — do NOT hardcode here.
+# LVGL fonts + display
 target_compile_definitions(${EXAMPLE_LIB} PUBLIC
-    MQTT_HOST=\"10.13.220.28\"
-    MQTT_PORT=1883
     LV_FONT_MONTSERRAT_14=1
     LV_FONT_MONTSERRAT_16=1
     LV_FONT_MONTSERRAT_20=1

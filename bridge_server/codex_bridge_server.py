@@ -9,8 +9,10 @@ Codex 额度桥接服务 v2（实时版）
 认证:   ~/.codex/auth.json 中的 access_token (自动刷新)
 
 使用方式:
-    python codex_bridge_server.py              # 默认端口 5678
+    python codex_bridge_server.py              # 默认端口 5678 (仅本机)
     python codex_bridge_server.py --port 8080  # 自定义端口
+    python codex_bridge_server.py --lan-mode   # 局域网模式
+    python codex_bridge_server.py --token SECRET  # 启用 token 认证
 
 启动后手环访问: http://<PC的局域网IP>:5678/quota
 """
@@ -22,12 +24,13 @@ import time
 import base64
 import argparse
 import threading
+import collections
 import urllib.request
 import urllib.error
 import urllib.parse
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
 try:
@@ -45,18 +48,37 @@ CACHE_TTL = 60          # API 缓存 60 秒
 TOKEN_CHECK_INTERVAL = 3600  # 每小时检查一次 token 有效期
 TOKEN_REFRESH_BUFFER = 86400  # token 剩余 < 1天时自动刷新
 
-# ── MQTT 配置 ──────────────────────────────────────────
+# ── MQTT 配置 (可通过命令行参数覆盖) ──────────────────────
 MQTT_HOST = "127.0.0.1"        # Mosquitto broker 在同一台 PC
 MQTT_PORT = 1883
+MQTT_USER = None
+MQTT_PASS = None
 MQTT_TOPIC = "codex/quota"
 MQTT_QOS = 0
 MQTT_RETAIN = True
 MQTT_PUBLISH_INTERVAL = 60     # 每 60 秒 publish 一次（与 API 缓存一致）
+MQTT_HEARTBEAT_TOPIC = "codex/device/+/heartbeat"
 
 # ── 全局状态 ──────────────────────────────────────────
 _cache = {"data": None, "updated_at": 0}
 _cache_lock = threading.Lock()
 _token_lock = threading.Lock()
+
+# ── 服务器度量 & 历史 (Tasks 7, 8) ──────────────────────
+_server_start_time = None
+_metrics = {
+    "total_requests": 0,
+    "api_success_count": 0,
+    "api_error_count": 0,
+    "mqtt_publish_count": 0,
+}
+_metrics_lock = threading.Lock()
+_history = collections.deque(maxlen=50)
+_history_lock = threading.Lock()
+
+# ── 设备心跳 (Task 6) ──────────────────────────────────
+_heartbeats = {}
+_heartbeats_lock = threading.Lock()
 
 
 def format_resets_in(resets_at) -> str:
@@ -207,6 +229,8 @@ def fetch_wham_usage() -> dict:
     auth = read_auth_file()
     access_token = auth.get("tokens", {}).get("access_token", "")
     if not access_token:
+        with _metrics_lock:
+            _metrics["api_error_count"] += 1
         return {"error": "no_token", "message": f"未找到 access_token，请检查 {CODEX_AUTH_FILE}"}
 
     req = urllib.request.Request(WHAM_USAGE_URL, headers={
@@ -221,12 +245,18 @@ def fetch_wham_usage() -> dict:
     except urllib.error.HTTPError as e:
         code = e.code
         body = e.read().decode()[:300] if hasattr(e, "read") else ""
+        with _metrics_lock:
+            _metrics["api_error_count"] += 1
         if code == 401:
             return {"error": "auth_failed", "message": "Token 已过期，请运行 codex 重新登录", "detail": body}
         return {"error": "api_error", "message": f"API 返回 HTTP {code}", "detail": body}
     except Exception as e:
+        with _metrics_lock:
+            _metrics["api_error_count"] += 1
         return {"error": "network_error", "message": f"请求失败: {e}"}
 
+    with _metrics_lock:
+        _metrics["api_success_count"] += 1
     return _normalize_usage(data)
 
 
@@ -305,12 +335,41 @@ _mqtt_client = None
 _mqtt_connected = False
 
 
+def _on_mqtt_message(client, userdata, msg):
+    """MQTT 消息回调 - 处理设备心跳"""
+    try:
+        topic = msg.topic
+        payload = msg.payload.decode("utf-8")
+        # codex/device/<device_id>/heartbeat
+        parts = topic.split("/")
+        if len(parts) >= 4 and parts[1] == "device" and parts[3] == "heartbeat":
+            device_id = parts[2]
+            try:
+                data = json.loads(payload)
+            except (json.JSONDecodeError, ValueError):
+                data = {"raw": payload}
+            with _heartbeats_lock:
+                _heartbeats[device_id] = {
+                    "last_seen": datetime.now(TZ_CST).isoformat(),
+                    "last_seen_ts": time.time(),
+                    "data": data,
+                }
+            print(f"  [mqtt] 收到设备心跳: {device_id}")
+    except Exception as e:
+        print(f"  [mqtt] 消息处理异常: {e}")
+
+
 def _on_mqtt_connect(client, userdata, flags, rc, properties=None):
     """MQTT 连接成功回调"""
     global _mqtt_connected
     if rc == 0:
         _mqtt_connected = True
         print(f"  [mqtt] 已连接 broker {MQTT_HOST}:{MQTT_PORT}")
+
+        # 订阅设备心跳主题 (Task 6)
+        client.subscribe(MQTT_HEARTBEAT_TOPIC, qos=MQTT_QOS)
+        print(f"  [mqtt] 已订阅心跳主题: {MQTT_HEARTBEAT_TOPIC}")
+
         # 连接后立即发布一次当前数据
         data = get_quota_data()
         if "error" not in data:
@@ -344,6 +403,11 @@ def mqtt_publisher_loop():
         )
         _mqtt_client.on_connect = _on_mqtt_connect
         _mqtt_client.on_disconnect = _on_mqtt_disconnect
+        _mqtt_client.on_message = _on_mqtt_message
+
+        # MQTT 认证 (Task 5)
+        if MQTT_USER:
+            _mqtt_client.username_pw_set(MQTT_USER, MQTT_PASS)
 
         _mqtt_client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
         _mqtt_client.loop_start()  # 后台网络线程
@@ -368,6 +432,8 @@ def mqtt_publisher_loop():
                 MQTT_TOPIC, payload, qos=MQTT_QOS, retain=MQTT_RETAIN
             )
             if info.rc == mqtt.MQTT_ERR_SUCCESS:
+                with _metrics_lock:
+                    _metrics["mqtt_publish_count"] += 1
                 p = data.get("primary", {})
                 s = data.get("secondary")
                 parts = [f"primary={p.get('remaining_percent', '?')}%"]
@@ -384,25 +450,79 @@ def mqtt_publisher_loop():
 class QuotaHandler(BaseHTTPRequestHandler):
     """HTTP 请求处理器"""
 
+    # 由 main() 设置的类级别配置
+    server_token = None
+    server_enable_cors = False
+
     def do_GET(self):
         parsed = urlparse(self.path)
 
         if parsed.path == "/quota":
-            data = get_quota_data()
-            self._send_json(200, data)
+            self._handle_quota(parsed)
         elif parsed.path == "/health":
             self._send_json(200, {"status": "ok", "timestamp": datetime.now(TZ_CST).isoformat()})
+        elif parsed.path == "/metrics":
+            self._handle_metrics()
+        elif parsed.path == "/history":
+            self._handle_history()
         elif parsed.path == "/":
             self._send_html()
         else:
             self._send_json(404, {"error": "not_found"})
 
+    def _check_token(self, parsed) -> bool:
+        """验证 token 认证 (Task 2)。返回 True 表示通过，False 表示已发送 401。"""
+        if not self.server_token:
+            return True
+        query_params = urllib.parse.parse_qs(parsed.query)
+        token_list = query_params.get("token", [])
+        if token_list and token_list[0] == self.server_token:
+            return True
+        self._send_json(401, {"error": "unauthorized", "message": "Invalid or missing token"})
+        return False
+
+    def _handle_quota(self, parsed):
+        """处理 /quota 请求（含 token 验证、度量、历史记录）"""
+        # Task 2: token 验证
+        if not self._check_token(parsed):
+            return
+
+        # Task 7: 请求计数
+        with _metrics_lock:
+            _metrics["total_requests"] += 1
+
+        data = get_quota_data()
+        self._send_json(200, data)
+
+        # Task 8: 记录到历史
+        with _history_lock:
+            _history.append({
+                "timestamp": datetime.now(TZ_CST).isoformat(),
+                "data": data,
+            })
+
+    def _handle_metrics(self):
+        """处理 /metrics 请求 (Task 7)"""
+        with _metrics_lock:
+            m = dict(_metrics)
+        uptime = time.time() - _server_start_time if _server_start_time else 0
+        m["uptime_seconds"] = round(uptime, 1)
+        self._send_json(200, m)
+
+    def _handle_history(self):
+        """处理 /history 请求 (Task 8)"""
+        with _history_lock:
+            entries = list(_history)
+        self._send_json(200, {"count": len(entries), "history": entries})
+
     def _send_json(self, code: int, data: dict):
         body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET")
+        # Task 3: CORS 仅在启用时发送
+        if self.server_enable_cors:
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -434,6 +554,55 @@ class QuotaHandler(BaseHTTPRequestHandler):
 
         live_badge = '<span style="color:#3fb950">● 实时</span>' if data.get("live") else ""
 
+        # Task 6: 设备心跳状态
+        with _heartbeats_lock:
+            hb_snapshot = dict(_heartbeats)
+
+        device_section = ""
+        if hb_snapshot:
+            device_rows = ""
+            now_ts = time.time()
+            for dev_id, info in sorted(hb_snapshot.items()):
+                last_seen = info.get("last_seen", "N/A")
+                age_sec = now_ts - info.get("last_seen_ts", 0)
+                if age_sec < 120:
+                    status_dot = '<span style="color:#3fb950">●</span>'
+                    status_label = "在线"
+                elif age_sec < 600:
+                    status_dot = '<span style="color:#d29922">●</span>'
+                    status_label = "超时"
+                else:
+                    status_dot = '<span style="color:#f85149">●</span>'
+                    status_label = "离线"
+                age_min = int(age_sec // 60)
+                device_rows += f"""
+                <tr>
+                    <td style="padding:6px 12px;border-bottom:1px solid #21262d">{status_dot} {dev_id}</td>
+                    <td style="padding:6px 12px;border-bottom:1px solid #21262d">{status_label}</td>
+                    <td style="padding:6px 12px;border-bottom:1px solid #21262d">{last_seen} ({age_min}分钟前)</td>
+                </tr>
+                """
+            device_section = f"""
+            <div class="card">
+                <h3>设备状态 (Devices)</h3>
+                <table style="width:100%;border-collapse:collapse;font-size:13px;color:#c9d1d9">
+                    <tr style="color:#8b949e">
+                        <th style="padding:6px 12px;text-align:left;border-bottom:1px solid #30363d">设备 ID</th>
+                        <th style="padding:6px 12px;text-align:left;border-bottom:1px solid #30363d">状态</th>
+                        <th style="padding:6px 12px;text-align:left;border-bottom:1px solid #30363d">最后心跳</th>
+                    </tr>
+                    {device_rows}
+                </table>
+            </div>
+            """
+        else:
+            device_section = """
+            <div class="card">
+                <h3>设备状态 (Devices)</h3>
+                <p style="color:#8b949e">暂无设备心跳数据</p>
+            </div>
+            """
+
         html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Codex Quota Bridge</title>
@@ -451,8 +620,12 @@ p{{color:#8b949e;font-size:14px}}
 <h1>Codex Quota Bridge</h1>
 <p>套餐: {data.get('plan_type', 'N/A').upper()} {live_badge}</p>
 {status_text}
-<div class="card"><h3>API Endpoint</h3>
+{device_section}
+<div class="card"><h3>API Endpoints</h3>
 <div class="endpoint">GET /quota</div>
+<div class="endpoint" style="margin-top:4px">GET /metrics</div>
+<div class="endpoint" style="margin-top:4px">GET /history</div>
+<div class="endpoint" style="margin-top:4px">GET /health</div>
 <p>数据每 {CACHE_TTL} 秒刷新 · 数据源: chatgpt.com/wham/usage (实时)</p></div>
 <script>setTimeout(()=>location.reload(),60000)</script>
 </body></html>"""
@@ -470,10 +643,45 @@ p{{color:#8b949e;font-size:14px}}
 
 
 def main():
+    global MQTT_HOST, MQTT_PORT, MQTT_USER, MQTT_PASS, _server_start_time
+
     parser = argparse.ArgumentParser(description="Codex 额度桥接服务 v2 (实时)")
     parser.add_argument("--port", "-p", type=int, default=5678, help="监听端口，默认 5678")
-    parser.add_argument("--host", default="0.0.0.0", help="监听地址，默认 0.0.0.0")
+    # Task 1: 默认监听 127.0.0.1
+    parser.add_argument("--host", default="127.0.0.1", help="监听地址，默认 127.0.0.1")
+    # Task 1: LAN 模式
+    parser.add_argument("--lan-mode", action="store_true",
+                        help="局域网模式，监听 0.0.0.0 (允许外部访问)")
+    # Task 2: Token 认证
+    parser.add_argument("--token", default=None,
+                        help="访问 /quota 所需的认证 token (可选)")
+    # Task 3: CORS
+    parser.add_argument("--enable-cors", action="store_true",
+                        help="启用 CORS 跨域请求头 (默认禁用)")
+    # Task 5: MQTT 参数
+    parser.add_argument("--mqtt-host", default="127.0.0.1",
+                        help="MQTT broker 地址，默认 127.0.0.1")
+    parser.add_argument("--mqtt-port", type=int, default=1883,
+                        help="MQTT broker 端口，默认 1883")
+    parser.add_argument("--mqtt-user", default=None,
+                        help="MQTT 认证用户名 (可选)")
+    parser.add_argument("--mqtt-pass", default=None,
+                        help="MQTT 认证密码 (可选)")
     args = parser.parse_args()
+
+    # Task 1: LAN 模式覆盖 host
+    if args.lan_mode:
+        args.host = "0.0.0.0"
+        print("WARNING: LAN mode enabled - server accessible from network")
+
+    # 更新全局 MQTT 配置
+    MQTT_HOST = args.mqtt_host
+    MQTT_PORT = args.mqtt_port
+    MQTT_USER = args.mqtt_user
+    MQTT_PASS = args.mqtt_pass
+
+    # 记录服务器启动时间 (Task 7)
+    _server_start_time = time.time()
 
     local_ip = get_local_ip()
 
@@ -505,14 +713,22 @@ def main():
     print(f"  数据源:   {WHAM_USAGE_URL}")
     print(f"  缓存:     {CACHE_TTL}秒")
     if HAS_MQTT:
-        print(f"  MQTT:     {MQTT_HOST}:{MQTT_PORT} topic={MQTT_TOPIC}")
+        mqtt_auth_str = f" user={MQTT_USER}" if MQTT_USER else ""
+        print(f"  MQTT:     {MQTT_HOST}:{MQTT_PORT} topic={MQTT_TOPIC}{mqtt_auth_str}")
     else:
         print(f"  MQTT:     未安装 paho-mqtt，已禁用")
+    print(f"  CORS:     {'启用' if args.enable_cors else '禁用'}")
+    print(f"  Token:    {'已设置' if args.token else '未设置'}")
     print()
-    print(f"  本机地址:  http://{local_ip}:{args.port}")
+    print(f"  监听地址:  {args.host}:{args.port}")
+    print(f"  本机地址:  http://127.0.0.1:{args.port}")
+    if args.host == "0.0.0.0":
+        print(f"  局域网:    http://{local_ip}:{args.port}")
     print(f"  额度接口:  http://{local_ip}:{args.port}/quota")
     print(f"  状态页面:  http://{local_ip}:{args.port}/")
     print(f"  健康检查:  http://{local_ip}:{args.port}/health")
+    print(f"  度量接口:  http://{local_ip}:{args.port}/metrics")
+    print(f"  历史接口:  http://{local_ip}:{args.port}/history")
     print()
 
     # 启动 MQTT 发布线程
@@ -524,7 +740,12 @@ def main():
         )
         mqtt_thread.start()
 
-    server = HTTPServer((args.host, args.port), QuotaHandler)
+    # Task 2, 3: 设置 handler 类级别配置
+    QuotaHandler.server_token = args.token
+    QuotaHandler.server_enable_cors = args.enable_cors
+
+    # Task 4: 使用 ThreadingHTTPServer 支持并发请求
+    server = ThreadingHTTPServer((args.host, args.port), QuotaHandler)
 
     try:
         server.serve_forever()

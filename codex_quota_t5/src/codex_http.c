@@ -59,13 +59,15 @@ int codex_http_get(const char *host, uint16_t port, const char *path,
         return -1;
     }
 
-    /* 复制响应体到输出缓冲区 */
-    size_t copy_len = response.body_length;
-    if (copy_len >= buf_size) {
-        copy_len = buf_size - 1;
+    /* 检查响应体是否能放入输出缓冲区（不允许静默截断） */
+    if (response.body_length >= buf_size) {
+        PR_ERR("[http] response too large: %u >= %u",
+               (unsigned)response.body_length, (unsigned)buf_size);
+        http_client_free(&response);
+        return -2;
     }
-    memcpy(out_buf, response.body, copy_len);
-    out_buf[copy_len] = '\0';
+    memcpy(out_buf, response.body, response.body_length);
+    out_buf[response.body_length] = '\0';
 
     http_client_free(&response);
     return 0;
@@ -117,27 +119,48 @@ int codex_parse_json(const char *json_str, codex_quota_t *quota)
         strncpy(quota->plan_type, plan->valuestring, sizeof(quota->plan_type) - 1);
     }
 
-    /* primary window */
+    /* ── primary 窗口（必须存在且为对象） ─────────── */
     cJSON *primary = cJSON_GetObjectItem(root, "primary");
-    if (primary && cJSON_IsObject(primary)) {
-        cJSON *label = cJSON_GetObjectItem(primary, "label");
-        if (label && cJSON_IsString(label))
-            strncpy(quota->primary.label, label->valuestring,
-                    sizeof(quota->primary.label) - 1);
-
-        cJSON *used = cJSON_GetObjectItem(primary, "used_percent");
-        if (used && cJSON_IsNumber(used))
-            quota->primary.used = used->valuedouble;
-
-        cJSON *remain = cJSON_GetObjectItem(primary, "remaining_percent");
-        if (remain && cJSON_IsNumber(remain))
-            quota->primary.remaining = remain->valuedouble;
-
-        cJSON *resets = cJSON_GetObjectItem(primary, "resets_in");
-        if (resets && cJSON_IsString(resets))
-            strncpy(quota->primary.resets_in, resets->valuestring,
-                    sizeof(quota->primary.resets_in) - 1);
+    if (primary == NULL) {
+        PR_ERR("[json] missing required field: \"primary\"");
+        cJSON_Delete(root);
+        return -1;
     }
+    if (!cJSON_IsObject(primary)) {
+        PR_ERR("[json] field \"primary\" must be an object");
+        cJSON_Delete(root);
+        return -1;
+    }
+
+    /* primary.remaining_percent（必须为数字） */
+    cJSON *remain = cJSON_GetObjectItem(primary, "remaining_percent");
+    if (remain == NULL) {
+        PR_ERR("[json] missing required field: \"primary.remaining_percent\"");
+        cJSON_Delete(root);
+        return -1;
+    }
+    if (!cJSON_IsNumber(remain)) {
+        PR_ERR("[json] field \"primary.remaining_percent\" must be a number");
+        cJSON_Delete(root);
+        return -1;
+    }
+
+    /* primary — 其余可选字段 */
+    cJSON *label = cJSON_GetObjectItem(primary, "label");
+    if (label && cJSON_IsString(label))
+        strncpy(quota->primary.label, label->valuestring,
+                sizeof(quota->primary.label) - 1);
+
+    cJSON *used = cJSON_GetObjectItem(primary, "used_percent");
+    if (used && cJSON_IsNumber(used))
+        quota->primary.used = used->valuedouble;
+
+    quota->primary.remaining = remain->valuedouble;
+
+    cJSON *resets = cJSON_GetObjectItem(primary, "resets_in");
+    if (resets && cJSON_IsString(resets))
+        strncpy(quota->primary.resets_in, resets->valuestring,
+                sizeof(quota->primary.resets_in) - 1);
 
     /* secondary window */
     cJSON *secondary = cJSON_GetObjectItem(root, "secondary");

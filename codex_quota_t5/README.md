@@ -8,8 +8,10 @@
 
 ```
 T5AI-Board ←──MQTT subscribe─── Mosquitto Broker ←──MQTT publish─── PC 桥接服务器
-  10.13.220.137                 10.13.220.28:1883                    (同一台 PC)
+  (WiFi IP)                     <BRIDGE_HOST>:1883                   (同一台 PC)
 ```
+
+> 注：`<BRIDGE_HOST>` 通过 `tos.py config menu` 中的 `BRIDGE_HOST` / `MQTT_HOST` 配置，不再硬编码在源码中。
 
 - **主通道 (MQTT)**：板子订阅 `codex/quota` 主题，桥接服务器推送额度变化
 - **回退通道 (HTTP)**：MQTT 断连时自动切换 HTTP GET 轮询（指数退避 60s→300s）
@@ -27,9 +29,9 @@ codex_quota_t5/
 │   ├── codex_mqtt.h     # MQTT 接口头文件
 │   ├── codex_ui.c       # LVGL UI：环形进度条 + 颜色分级
 │   └── codex_ui.h       # UI 接口
-├── CMakeLists.txt       # 构建配置 (含 MQTT_HOST/PORT + 源文件列表)
-├── app_default.config   # 编译选项（WiFi、Bridge、MQTT）
-├── Kconfig              # 可配置项（WiFi SSID、服务器地址、MQTT 配置）
+├── CMakeLists.txt       # 构建配置 (源文件列表 + 编译选项，不含 IP/密码)
+├── app_default.config   # 编译选项默认值（WiFi、Bridge、MQTT，安全空值）
+├── Kconfig              # 可配置项（WiFi SSID、服务器地址、MQTT 配置）— 唯一配置源
 └── README.md            # 本文件
 ```
 
@@ -88,7 +90,16 @@ tos.py config menu
 - `MQTT_HOST`：MQTT broker 的 IP（与 BRIDGE_HOST 相同即可）
 - `MQTT_PORT`：默认 `1883`
 
+**重要：MQTT_HOST 和 MQTT_PORT 仅通过 Kconfig 配置**，不再在 `CMakeLists.txt` 中硬编码。
+`CMakeLists.txt` 仅包含构建结构（源文件列表、LVGL 字体等），所有网络地址均由 Kconfig 管理。
+
 `app_default.config` 只保留空 WiFi 默认值，避免把密码提交进项目。
+
+**安全改进：**
+- 桥接服务器的 MQTT broker 配置位于 `bridge_server/mosquitto.conf`，建议生产环境限制监听地址
+- 桥接服务器使用 token 认证（`~/.codex/auth.json`），自动刷新过期 token
+- `.gitignore` 已排除 `.env`、`auth.json`、`*.secret` 等敏感文件
+- 完整配置指南参见 [docs/configuration.md](../docs/configuration.md)
 
 ### 3. 编译
 

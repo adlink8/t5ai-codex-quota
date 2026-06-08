@@ -19,7 +19,10 @@
 #include <string.h>
 
 /* ── 配置 ─────────────────────────────────────────── */
-#define MQTT_TOPIC          "codex/quota"
+#ifndef DEVICE_ID
+#define DEVICE_ID           "t5ai-001"
+#endif
+#define MQTT_TOPIC          "codex/quota/global"
 #define MQTT_QOS            0       /* QoS 0: Fire and Forget */
 #define MQTT_KEEPALIVE      60      /* 秒 */
 #define MQTT_TIMEOUT_MS     5000    /* 连接超时 */
