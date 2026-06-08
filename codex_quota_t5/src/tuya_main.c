@@ -14,7 +14,6 @@
 #include "tal_system.h"
 #include "tal_log.h"
 #include "tal_memory.h"
-#include "tal_rand.h"
 #include "tkl_system.h"
 #include "tkl_output.h"
 #include "cJSON.h"
@@ -535,7 +534,7 @@ void tuya_app_main(void)
                                   (unsigned)mqtt_backoff_ms);
                         ui_statusf("MQTT fail, retry %us",
                                    (unsigned)(mqtt_backoff_ms / 1000));
-                        uint32_t jitter = tal_rand() % 1001; /* 0–1000 ms */
+                        uint32_t jitter = tkl_system_get_random(1000); /* 0–1000 ms */
                         PR_NOTICE("[codex] backoff=%u ms + jitter=%u ms",
                                   (unsigned)mqtt_backoff_ms, (unsigned)jitter);
                         mqtt_reconnect_at_ms = now + mqtt_backoff_ms + jitter;
