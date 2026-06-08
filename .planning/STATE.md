@@ -2,69 +2,101 @@
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-06-07)
+See: `.planning/PROJECT.md` (updated 2026-06-08)
 
 **Core value:** Make the T5AI-Board reliably display Codex quota status via MQTT + HTTP fallback, with a repeatable build, flash, and debug workflow.
 
-**Current focus:** Phase 3 complete — MQTT disconnect/reconnect, HTTP fallback, and exponential backoff all verified on hardware.
+**Current focus:** Issue #1 resolved — security hardening, config unification, stability test infrastructure, CI all done. Phase 3 hardware-verified features remain the baseline.
 
 ## Current Status
 
 - Project initialized 2026-06-07.
-- **Phase 1 (Build Baseline):** DONE — TuyaOpen SDK build succeeds in WSL Ubuntu-D.
-- **Phase 2 (Runtime Connectivity):** DONE — WiFi, HTTP polling, LVGL UI all working on hardware.
-- **Phase 3 (MQTT Integration):** DONE — Full MQTT + HTTP dual-channel verified on hardware.
-- GitHub repo created: [adlink8/t5ai-codex-quota](https://github.com/adlink8/t5ai-codex-quota)
-- Bridge server organized into `bridge_server/` with one-click start/stop scripts.
-- Firmware archive created at `firmware_archive/` (14 binaries, categorized).
-- Flash tool directory cleaned (only tyutool_cli.exe + tyutool_gui.exe remain).
+- **Phase 1 (Build Baseline):** DONE
+- **Phase 2 (Runtime Connectivity):** DONE
+- **Phase 3 (MQTT Integration):** DONE — hardware-verified.
+- **Issue #1 (Security & Engineering):** DONE (2026-06-08) — 20/21 items completed, 1 deferred.
+- GitHub: [adlink8/t5ai-codex-quota](https://github.com/adlink8/t5ai-codex-quota)
+- GitHub Actions CI: python-check, secret-scan, markdown-check
+- Push via SSH: `ssh://git@ssh.github.com:443/adlink8/t5ai-codex-quota.git` (HTTPS blocked from current network)
 
-## Phase 3 Verified Features
+## Issue #1 Completion Summary
+
+| Category | Items | Completed |
+|----------|-------|-----------|
+| P0 High Priority | 7 | 7/7 |
+| P1 Medium Priority | 6 | 5/6 (LCD Diagnostics deferred) |
+| P2 Enhancement | 4 | Deferred to future |
+| Startup Scripts | 2 | 2/2 |
+| Docs & Governance | 2 | 2/2 |
+
+### Key Changes
+
+**Security:**
+- Bridge server defaults to 127.0.0.1, `--lan-mode` for network access
+- Token auth on `/quota` endpoint
+- Mosquitto restricted to localhost, auth examples provided
+- CORS removed by default, `--enable-cors` to opt in
+
+**Config:**
+- CMakeLists.txt no longer hardcodes MQTT_HOST/MQTT_PORT
+- Single source of truth: Kconfig + app_default.config
+- `docs/configuration.md` created as unified guide
+
+**Firmware:**
+- HTTP body truncation returns error -2 with size logging
+- JSON parse validates `primary` object + `remaining_percent` number
+- MQTT reconnect jitter 0-1000ms on exponential backoff
+- Topic changed to `codex/quota/global` with DEVICE_ID support
+
+**Bridge Server:**
+- ThreadingHTTPServer (no more blocking)
+- Device heartbeat receiving (`codex/device/+/heartbeat`)
+- `/metrics` endpoint (uptime, request counts, API stats)
+- `/history` endpoint (last 50 quota responses)
+- MQTT credentials support (`--mqtt-user`/`--mqtt-pass`)
+
+**Infrastructure:**
+- `.github/workflows/ci.yml` with 3 jobs
+- `.gitignore` covers sensitive/runtime/venv files
+- `start_bridge.bat` uses `.venv` isolation + PID tracking
+- `stop_bridge.bat` kills by PID, not window title
+
+**Stability Tests:**
+- `tests/stability/test_plan.md` — 5 scenarios with pass/fail criteria
+- `tests/stability/run_full_test.ps1` — master orchestration
+- `tests/stability/restart_broker_loop.ps1` — broker restart loop
+- `tests/stability/monitor_serial_log.ps1` — serial pattern detection
+- `tests/stability/report_template.md` — report template
+
+## Phase 3 Verified Features (Hardware)
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| MQTT connect + subscribe | ✓ | `codex/quota` topic, QoS 0, retain |
-| Disconnect detection | ✓ | Socket fault → MQTTRecvFailed → on_disconnect |
-| Disconnect debounce | ✓ | 2-second window, every-50th silent summary |
-| Exponential backoff reconnect | ✓ | 1s → 2s → 4s → ... → 60s cap |
-| HTTP fallback auto-switch | ✓ | refresh_task resumes HTTP polling when MQTT down |
-| Broker recovery auto-reconnect | ✓ | Board reconnects within ~60s of broker restart |
-| SDK socket fd guard | ✓ | `mqtt_client_yield()` checks `sock_fd < 0` before ProcessLoop |
+| MQTT connect + subscribe | ✓ | `codex/quota/global` topic (updated) |
+| Disconnect detection | ✓ | Socket fault → on_disconnect with debounce |
+| Exponential backoff + jitter | ✓ | 1s→60s cap + 0-1000ms random jitter |
+| HTTP fallback auto-switch | ✓ | Automatic when MQTT disconnected |
+| Broker recovery reconnect | ✓ | ~60s after broker restart |
+| SDK socket fd guard | ✓ | Prevents infinite error loop |
 
 ## Build & Flash Reference
 
 | Item | Value |
 |------|-------|
 | SDK | TuyaOpen @ `~/TuyaOpen` (WSL Ubuntu-D) |
-| App path | `~/TuyaOpen/apps/codex_quota` |
-| Build command | `python ../../tos.py build` |
-| Flash tool | `tyutool_cli.exe write -d t5ai -p COM12 -f <QIO.bin>` |
-| Flash port | COM12 (CH342 Port A) @ 921600 baud |
-| Debug port | COM11 (CH342 Port B) @ 460800 baud |
-| **Correct firmware** | **QIO (~2.6 MB)** — QSPI full image with bootloader |
-| Wrong firmware | UA (~2.4 MB) — causes black screen, no bootloader |
-
-## Network Topology
-
-- PC: 10.13.220.28 (WiFi hotspot "一连就爆炸")
-- Board: 10.13.220.137 (same subnet)
-- Mosquitto: port 1883, anonymous access
-- Bridge server: port 5678, HTTP + MQTT publish
-
-## Key Bugs Found & Fixed
-
-| Bug | Root Cause | Fix |
-|-----|-----------|-----|
-| Board black screen after flash | Flashed UA format instead of QIO | Always use QIO (~2.6MB) for flashing |
-| Infinite error loop in SDK wrapper | `MQTT_ProcessLoop` called with invalid socket | Added `sock_fd < 0` guard in `mqtt_client_yield()` |
-| Callback storm on disconnect | Multiple rapid `on_disconnected` callbacks | 2-second debounce window with counter |
-| Kconfig missing MQTT entries | No MQTT menu in Kconfig | Added MQTT_HOST and MQTT_PORT config entries |
+| Build | `python ../../tos.py build` |
+| Flash | `tyutool_cli.exe write -d t5ai -p COM12 -f <QIO.bin>` |
+| Flash port | COM12 @ 921600 baud |
+| Debug port | COM11 @ 460800 baud |
+| **Correct firmware** | **QIO (~2.6 MB)** |
 
 ## Open Items
 
-- [ ] 4-hour stability test (board running unattended)
-- [ ] SDK `mqtt_client_wrapper.c` socket fd guard not upstreamed to TuyaOpen
+- [ ] 4-hour stability test execution (scripts ready at `tests/stability/`)
+- [ ] LCD Diagnostics page (needs hardware button input, Issue #11 deferred)
+- [ ] SDK socket fd guard not upstreamed to TuyaOpen
+- [ ] P2 enhancements: quota history, alerts, NVS config, OTA
 
 ## Next Action
 
-Run 4-hour stability test: leave the board running with MQTT broker active, periodically kill/restart broker to verify reconnection, check UI stays responsive and data stays fresh.
+Execute the 4-hour stability test using `tests/stability/run_full_test.ps1` with broker restart every 10 minutes. Fill in the report template and commit results.
