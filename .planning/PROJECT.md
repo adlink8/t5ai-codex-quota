@@ -31,7 +31,7 @@ Make the T5AI-Board reliably display Codex quota status via MQTT + HTTP fallback
 - ✓ HTTP body truncation returns explicit error — Issue #1
 - ✓ JSON parse validates required fields — Issue #1
 - ✓ ThreadingHTTPServer prevents blocking — Issue #1
-- ✓ MQTT topic `codex/quota/global` + DEVICE_ID multi-device — Issue #1
+- ✓ MQTT topic `codex/quota` + DEVICE_ID multi-device — Issue #1
 - ✓ Device heartbeat receiving on bridge status page — Issue #1
 - ✓ MQTT reconnect jitter 0-1000ms — Issue #1
 - ✓ /metrics and /history endpoints — Issue #1
@@ -63,11 +63,11 @@ Make the T5AI-Board reliably display Codex quota status via MQTT + HTTP fallback
 
 ```
 T5AI-Board ←──MQTT subscribe─── Mosquitto (127.0.0.1:1883) ←──MQTT publish─── Bridge Server
-codex/quota/global                                             token auth         (127.0.0.1:5678)
+codex/quota                                             token auth         (127.0.0.1:5678)
 device heartbeat ←─── codex/device/+/heartbeat                                     ↕ Codex API
 ```
 
-- **Primary (MQTT):** `codex/quota/global` topic, retain, token-gated
+- **Primary (MQTT):** `codex/quota` topic, retain, token-gated
 - **Fallback (HTTP):** Auto-switch on MQTT disconnect, exponential backoff + jitter
 - **Security:** Bridge defaults localhost, LAN mode + token opt-in, CORS opt-in
 - **Multi-device:** DEVICE_ID in topic path, heartbeat monitoring
@@ -92,7 +92,7 @@ device heartbeat ←─── codex/device/+/heartbeat                          
 | Token auth on /quota | Prevents unauthorized quota access | ✓ Issue #1 |
 | Config via Kconfig only | Single source, no CMake hardcoding | ✓ Issue #1 |
 | ThreadingHTTPServer | Slow API calls don't block health/status | ✓ Issue #1 |
-| Topic `codex/quota/global` | Supports multi-device on same broker | ✓ Issue #1 |
+| Topic `codex/quota` | Supports multi-device on same broker | ✓ Issue #1 |
 | Reconnect jitter | Prevents thundering herd on recovery | ✓ Issue #1 |
 | venv in start_bridge.bat | Isolates Python deps from system | ✓ Issue #1 |
 | PID-based process mgmt | Precise stop, no accidental kills | ✓ Issue #1 |

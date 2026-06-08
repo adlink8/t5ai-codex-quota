@@ -1,9 +1,8 @@
 /**
  * @file codex_mqtt.h
- * @brief MQTT 客户端接口 - 订阅 codex/quota/global 主题接收额度推送
+ * @brief MQTT 客户端接口 - 订阅 codex/quota 主题接收额度推送
  *
- * 多设备场景下使用 global 子主题；DEVICE_ID 默认为 "t5ai-001"，
- * 可在 Kconfig 或编译选项中覆盖。
+ * DEVICE_ID 默认为 "t5ai-001"，可在 Kconfig 或编译选项中覆盖。
  *
  * 依赖 TuyaOpen libmqtt (Amazon coreMQTT v1.0.1)
  */

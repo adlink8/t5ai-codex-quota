@@ -46,7 +46,7 @@ See: `.planning/PROJECT.md` (updated 2026-06-08)
 - HTTP body truncation returns error -2 with size logging
 - JSON parse validates `primary` object + `remaining_percent` number
 - MQTT reconnect jitter 0-1000ms on exponential backoff
-- Topic changed to `codex/quota/global` with DEVICE_ID support
+- Topic changed to `codex/quota` with DEVICE_ID support
 
 **Bridge Server:**
 - ThreadingHTTPServer (no more blocking)
@@ -72,7 +72,7 @@ See: `.planning/PROJECT.md` (updated 2026-06-08)
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| MQTT connect + subscribe | ✓ | `codex/quota/global` topic (updated) |
+| MQTT connect + subscribe | ✓ | `codex/quota` topic (updated) |
 | Disconnect detection | ✓ | Socket fault → on_disconnect with debounce |
 | Exponential backoff + jitter | ✓ | 1s→60s cap + 0-1000ms random jitter |
 | HTTP fallback auto-switch | ✓ | Automatic when MQTT disconnected |
