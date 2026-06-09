@@ -31,7 +31,7 @@ endmenu
 menu "MQTT Configuration"
     config MQTT_HOST
         string "MQTT broker IP"
-        default ""
+        default "192.168.1.109"
 
     config MQTT_PORT
         int "MQTT broker port"
