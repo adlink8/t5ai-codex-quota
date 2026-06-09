@@ -99,4 +99,4 @@ See: `.planning/PROJECT.md` (updated 2026-06-08)
 
 ## Next Action
 
-Execute the 4-hour stability test using `tests/stability/run_full_test.ps1` with broker restart every 10 minutes. Fill in the report template and commit results.
+4-hour stability test PASSED. All Active items complete. Next: pick from Deferred items (LCD Diagnostics, quota history, alerts, NVS config, OTA) or upstream socket fd guard.
