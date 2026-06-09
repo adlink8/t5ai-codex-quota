@@ -43,7 +43,7 @@ Make the T5AI-Board reliably display Codex quota status via MQTT + HTTP fallback
 
 ### Active
 
-- [ ] 4-hour stability test execution (scripts at `tests/stability/`)
+- [x] 4-hour stability test execution — PASSED (2026-06-09)
 
 ### Deferred
 

@@ -92,7 +92,7 @@ See: `.planning/PROJECT.md` (updated 2026-06-08)
 
 ## Open Items
 
-- [ ] 4-hour stability test execution (scripts ready at `tests/stability/`)
+- [x] 4-hour stability test execution — PASSED, no disconnection (2026-06-09)
 - [ ] LCD Diagnostics page (needs hardware button input, Issue #11 deferred)
 - [ ] SDK socket fd guard not upstreamed to TuyaOpen
 - [ ] P2 enhancements: quota history, alerts, NVS config, OTA
