@@ -1,6 +1,25 @@
 /**
  * @file codex_http.c
- * @brief HTTP 客户端 + JSON 解析（对接桥接服务器 /quota 接口）
+ * @brief HTTP 客户端 + JSON 解析实现
+ *
+ * HTTP 请求流程：
+ *   codex_http_get()
+ *     ├── 构造 http_client_request_t（host/port/path/GET/timeout=10s）
+ *     ├── 调用 http_client_request() 执行请求
+ *     ├── 检查 status_code == 200
+ *     ├── 检查响应体大小 < buf_size（不允许静默截断）
+ *     └── memcpy 响应体到 out_buf
+ *
+ * JSON 解析流程：
+ *   codex_parse_json()
+ *     ├── cJSON_Parse() 解析字符串
+ *     ├── 检查 "error" 字段（服务器错误）
+ *     ├── 解析 "plan_type"（可选）
+ *     ├── 解析 "primary"（必须存在且为对象）
+ *     │   ├── "remaining_percent"（必须为数字）
+ *     │   ├── "label" / "used_percent" / "resets_in"（可选）
+ *     ├── 解析 "secondary"（可选，Plus/Pro 才有）
+ *     └── 解析 "updated_at"（提取 HH:MM）
  */
 
 #include "codex_http.h"
@@ -10,9 +29,21 @@
 #include <string.h>
 
 /* ── HTTP GET 请求 ────────────────────────────────── */
+
+/**
+ * @brief 发起 HTTP GET 请求并获取响应体
+ *
+ * @param[in]  host      服务器地址（如 "192.168.1.109"）
+ * @param[in]  port      端口号（如 5678）
+ * @param[in]  path      请求路径（如 "/quota"）
+ * @param[out] out_buf   输出缓冲区
+ * @param[in]  buf_size  输出缓冲区大小
+ * @return  0 成功, -1 请求失败/状态码异常, -2 响应体过大
+ */
 int codex_http_get(const char *host, uint16_t port, const char *path,
                    char *out_buf, size_t buf_size)
 {
+    /* 构造 HTTP 请求结构体 */
     http_client_request_t request = {
         .host = host,
         .port = port,
@@ -20,12 +51,12 @@ int codex_http_get(const char *host, uint16_t port, const char *path,
         .method = "GET",
         .cacert = NULL,
         .cacert_len = 0,
-        .tls_no_verify = false,  /* 纯 HTTP，必须 false 才走 TCP 通道 */
+        .tls_no_verify = false,  /* 纯 HTTP，必须 false 才走 TCP 通道（非 TLS） */
         .headers = NULL,
         .headers_count = 0,
         .body = NULL,
         .body_length = 0,
-        .timeout_ms = 10000,
+        .timeout_ms = 10000,     /* 10 秒超时 */
     };
 
     http_client_response_t response = {0};
@@ -33,8 +64,10 @@ int codex_http_get(const char *host, uint16_t port, const char *path,
     PR_NOTICE("[http] GET http://%s:%u%s timeout=%ums",
               host, port, path, (unsigned)request.timeout_ms);
 
+    /* 执行 HTTP 请求 */
     http_client_status_t status = http_client_request(&request, &response);
 
+    /* 检查请求是否成功（网络层） */
     if (status != HTTP_CLIENT_SUCCESS) {
         PR_ERR("[http] request failed: status=%d host=%s port=%u path=%s",
                status, host, port, path);
@@ -47,12 +80,14 @@ int codex_http_get(const char *host, uint16_t port, const char *path,
               (unsigned)response.body_length,
               (unsigned)response.headers_length);
 
+    /* 检查 HTTP 状态码是否为 200 */
     if (response.status_code != 200) {
         PR_ERR("[http] unexpected HTTP status=%u", response.status_code);
         http_client_free(&response);
         return -1;
     }
 
+    /* 检查响应体是否为空 */
     if (response.body == NULL || response.body_length == 0) {
         PR_ERR("[http] empty response body");
         http_client_free(&response);
@@ -66,6 +101,8 @@ int codex_http_get(const char *host, uint16_t port, const char *path,
         http_client_free(&response);
         return -2;
     }
+
+    /* 拷贝响应体到输出缓冲区并添加字符串结尾 */
     memcpy(out_buf, response.body, response.body_length);
     out_buf[response.body_length] = '\0';
 
@@ -74,8 +111,12 @@ int codex_http_get(const char *host, uint16_t port, const char *path,
 }
 
 /* ── JSON 解析（桥接服务器返回格式）───────────────── */
-/*
+
+/**
+ * @brief 解析桥接服务器返回的 JSON 额度数据
+ *
  * 期望的 JSON 格式：
+ * @code
  * {
  *   "plan_type": "plus",
  *   "primary": {
@@ -84,18 +125,24 @@ int codex_http_get(const char *host, uint16_t port, const char *path,
  *     "remaining_percent": 94.0,
  *     "resets_in": "4小时52分钟"
  *   },
- *   "secondary": {
+ *   "secondary": {                    // Plus/Pro 可选
  *     "label": "周额度",
  *     "used_percent": 1.0,
  *     "remaining_percent": 99.0,
  *     "resets_in": "6天21小时"
  *   },
- *   "credits": { ... },
+ *   "credits": { ... },               // 未使用
  *   "updated_at": "2026-06-07T10:00:00+08:00"
  * }
+ * @endcode
+ *
+ * @param[in]  json_str  JSON 字符串（以 '\\0' 结尾）
+ * @param[out] quota     输出结构体
+ * @return  0 成功, -1 失败
  */
 int codex_parse_json(const char *json_str, codex_quota_t *quota)
 {
+    /* 解析 JSON 字符串 */
     cJSON *root = cJSON_Parse(json_str);
     if (!root) {
         const char *err = cJSON_GetErrorPtr();
@@ -103,7 +150,7 @@ int codex_parse_json(const char *json_str, codex_quota_t *quota)
         return -1;
     }
 
-    /* 检查是否有错误字段 */
+    /* 检查服务器是否返回了错误字段 */
     cJSON *error = cJSON_GetObjectItem(root, "error");
     if (error && cJSON_IsString(error)) {
         PR_ERR("[json] 服务器错误: %s", error->valuestring);
@@ -111,15 +158,16 @@ int codex_parse_json(const char *json_str, codex_quota_t *quota)
         return -1;
     }
 
+    /* 清零输出结构体 */
     memset(quota, 0, sizeof(codex_quota_t));
 
-    /* plan_type */
+    /* ── 解析 plan_type（可选） ─────────────────── */
     cJSON *plan = cJSON_GetObjectItem(root, "plan_type");
     if (plan && cJSON_IsString(plan)) {
         strncpy(quota->plan_type, plan->valuestring, sizeof(quota->plan_type) - 1);
     }
 
-    /* ── primary 窗口（必须存在且为对象） ─────────── */
+    /* ── 解析 primary 窗口（必须存在且为对象）──── */
     cJSON *primary = cJSON_GetObjectItem(root, "primary");
     if (primary == NULL) {
         PR_ERR("[json] missing required field: \"primary\"");
@@ -145,7 +193,7 @@ int codex_parse_json(const char *json_str, codex_quota_t *quota)
         return -1;
     }
 
-    /* primary — 其余可选字段 */
+    /* primary —— 其余可选字段 */
     cJSON *label = cJSON_GetObjectItem(primary, "label");
     if (label && cJSON_IsString(label))
         strncpy(quota->primary.label, label->valuestring,
@@ -155,6 +203,7 @@ int codex_parse_json(const char *json_str, codex_quota_t *quota)
     if (used && cJSON_IsNumber(used))
         quota->primary.used = used->valuedouble;
 
+    /* remaining_percent 已校验，直接赋值 */
     quota->primary.remaining = remain->valuedouble;
 
     cJSON *resets = cJSON_GetObjectItem(primary, "resets_in");
@@ -162,7 +211,7 @@ int codex_parse_json(const char *json_str, codex_quota_t *quota)
         strncpy(quota->primary.resets_in, resets->valuestring,
                 sizeof(quota->primary.resets_in) - 1);
 
-    /* secondary window */
+    /* ── 解析 secondary 窗口（可选，Plus/Pro 才有）── */
     cJSON *secondary = cJSON_GetObjectItem(root, "secondary");
     if (secondary && cJSON_IsObject(secondary)) {
         quota->has_secondary = 1;
@@ -186,18 +235,22 @@ int codex_parse_json(const char *json_str, codex_quota_t *quota)
                     sizeof(quota->secondary.resets_in) - 1);
     }
 
-    /* updated_at — 提取时间部分 */
+    /* ── 解析 updated_at（ISO8601 格式，仅提取 HH:MM）── */
     cJSON *updated = cJSON_GetObjectItem(root, "updated_at");
     if (updated && cJSON_IsString(updated)) {
-        /* ISO 格式太长，只取 HH:MM */
+        /*
+         * ISO8601 格式示例："2026-06-07T10:00:00+08:00"
+         * 找到 'T' 字符后，取其后的 5 个字符即为 "HH:MM"
+         */
         const char *t = updated->valuestring;
         const char *p = strchr(t, 'T');
         if (p) {
-            p++; /* 跳过 T */
-            strncpy(quota->updated_time, p, 5); /* "10:00" */
+            p++; /* 跳过 'T' */
+            strncpy(quota->updated_time, p, 5); /* 截取 "10:00" */
         }
     }
 
+    /* 释放 cJSON 树 */
     cJSON_Delete(root);
     return 0;
 }
