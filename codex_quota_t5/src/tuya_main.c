@@ -28,6 +28,7 @@
 #include "codex_http.h"
 #include "codex_ui.h"
 #include "codex_mqtt.h"
+#include "codex_serial.h"
 
 /* ── 配置 ────────────────────────────────────────── */
 /* WiFi、桥接服务器、MQTT 参数由 Kconfig 提供。 */
@@ -69,6 +70,15 @@ static THREAD_HANDLE g_refresh_thread;   /* 刷新线程句柄 */
 static uint32_t g_refresh_ms = REFRESH_OK_MS;
 static int g_wifi_ok = 0;
 static int g_mqtt_ok = 0;               /* MQTT 连接状态 */
+
+/* ── 运行时可配置副本（串口命令可修改）────────────── */
+static char g_wifi_ssid[32] = {0};
+static char g_wifi_password[64] = {0};
+static char g_bridge_host[48] = {0};
+static int  g_bridge_port = BRIDGE_PORT;
+static char g_bridge_path[32] = {0};
+static char g_mqtt_host[48] = {0};
+static int  g_mqtt_port = MQTT_PORT;
 
 static const char *wifi_stat_name(WF_STATION_STAT_E stat)
 {
@@ -232,14 +242,14 @@ static void wifi_event_cb(WF_EVENT_E event, void *arg)
 /* ── WiFi 连接 ────────────────────────────────────── */
 static int wifi_connect(void)
 {
-    if (WIFI_SSID[0] == '\0') {
+    if (g_wifi_ssid[0] == '\0') {
         PR_ERR("[codex] WiFi SSID 未配置，请通过 Kconfig/app_default.config 设置 WIFI_SSID");
         return -1;
     }
 
     PR_NOTICE("[wifi] config ssid=\"%s\" password_len=%u bridge=http://%s:%d%s",
-              WIFI_SSID, (unsigned)strlen(WIFI_PASSWORD),
-              BRIDGE_HOST, BRIDGE_PORT, BRIDGE_PATH);
+              g_wifi_ssid, (unsigned)strlen(g_wifi_password),
+              g_bridge_host, g_bridge_port, g_bridge_path);
 
     OPERATE_RET ret = tal_wifi_init(wifi_event_cb);
     PR_NOTICE("[wifi] tal_wifi_init ret=%d", ret);
@@ -252,21 +262,21 @@ static int wifi_connect(void)
     PR_NOTICE("[wifi] set station mode ret=%d", ret);
 
     AP_IF_S *ap = NULL;
-    ret = tal_wifi_assign_ap_scan((int8_t *)WIFI_SSID, &ap);
+    ret = tal_wifi_assign_ap_scan((int8_t *)g_wifi_ssid, &ap);
     if (ret == OPRT_OK && ap != NULL) {
         PR_NOTICE("[wifi] scan hit ssid=\"%s\" channel=%u rssi=%d security=%u",
                   ap->ssid, ap->channel, ap->rssi, ap->security);
         tal_wifi_release_ap(ap);
     } else {
-        PR_ERR("[wifi] scan failed/no ap: ret=%d ssid=\"%s\"", ret, WIFI_SSID);
+        PR_ERR("[wifi] scan failed/no ap: ret=%d ssid=\"%s\"", ret, g_wifi_ssid);
         ui_errorf("AP scan failed %d", ret);
         log_visible_aps();
     }
 
     log_wifi_snapshot("before_connect");
 
-    PR_NOTICE("[wifi] station_connect start ssid=\"%s\"", WIFI_SSID);
-    ret = tal_wifi_station_connect((int8_t *)WIFI_SSID, (int8_t *)WIFI_PASSWORD);
+    PR_NOTICE("[wifi] station_connect start ssid=\"%s\"", g_wifi_ssid);
+    ret = tal_wifi_station_connect((int8_t *)g_wifi_ssid, (int8_t *)g_wifi_password);
 
     if (ret != OPRT_OK) {
         PR_ERR("[wifi] station_connect returned error: %d", ret);
@@ -325,9 +335,9 @@ static int fetch_quota(void)
 {
     char json_buf[2048] = {0};
 
-    if (BRIDGE_HOST[0] == '\0' || BRIDGE_PATH[0] == '\0' || BRIDGE_PORT <= 0) {
+    if (g_bridge_host[0] == '\0' || g_bridge_path[0] == '\0' || g_bridge_port <= 0) {
         PR_ERR("[codex] 桥接服务器未配置: host=%s port=%d path=%s",
-               BRIDGE_HOST, BRIDGE_PORT, BRIDGE_PATH);
+               g_bridge_host, g_bridge_port, g_bridge_path);
         return -1;
     }
 
@@ -340,9 +350,9 @@ static int fetch_quota(void)
     }
 
     PR_NOTICE("[codex] 请求桥接服务器: http://%s:%d%s",
-              BRIDGE_HOST, BRIDGE_PORT, BRIDGE_PATH);
+              g_bridge_host, g_bridge_port, g_bridge_path);
 
-    int ret = codex_http_get(BRIDGE_HOST, BRIDGE_PORT, BRIDGE_PATH,
+    int ret = codex_http_get(g_bridge_host, g_bridge_port, g_bridge_path,
                              json_buf, sizeof(json_buf));
     if (ret != 0) {
         PR_ERR("[codex] HTTP 请求失败");
@@ -419,9 +429,18 @@ void tuya_app_main(void)
 
     tal_log_init(TAL_LOG_LEVEL_DEBUG, 1024, (TAL_LOG_OUTPUT_CB)tkl_log_output);
 
+    /* 初始化运行时配置副本 */
+    strncpy(g_wifi_ssid, WIFI_SSID, sizeof(g_wifi_ssid) - 1);
+    strncpy(g_wifi_password, WIFI_PASSWORD, sizeof(g_wifi_password) - 1);
+    strncpy(g_bridge_host, BRIDGE_HOST, sizeof(g_bridge_host) - 1);
+    g_bridge_port = BRIDGE_PORT;
+    strncpy(g_bridge_path, BRIDGE_PATH, sizeof(g_bridge_path) - 1);
+    strncpy(g_mqtt_host, MQTT_HOST, sizeof(g_mqtt_host) - 1);
+    g_mqtt_port = MQTT_PORT;
+
     PR_NOTICE("[codex] Codex Quota Monitor for T5AI-Board");
     PR_NOTICE("[codex] bridge=http://%s:%d%s mqtt=%s:%d",
-              BRIDGE_HOST, BRIDGE_PORT, BRIDGE_PATH, MQTT_HOST, MQTT_PORT);
+              g_bridge_host, g_bridge_port, g_bridge_path, g_mqtt_host, g_mqtt_port);
 
     tal_sw_timer_init();
 
@@ -458,7 +477,7 @@ void tuya_app_main(void)
     }
 
     /* 6. 尝试 MQTT 连接（优先使用推送模式） */
-    if (g_wifi_ok && MQTT_HOST[0] != '\0') {
+    if (g_wifi_ok && g_mqtt_host[0] != '\0') {
         /* 等待网络栈完全就绪 */
         PR_NOTICE("[codex] 等待网络栈就绪...");
         tkl_system_sleep(2000);
@@ -467,7 +486,7 @@ void tuya_app_main(void)
         codex_ui_set_status("Connecting MQTT...");
         lv_vendor_disp_unlock();
 
-        if (codex_mqtt_init_and_connect(MQTT_HOST, MQTT_PORT) == 0) {
+        if (codex_mqtt_init_and_connect(g_mqtt_host, g_mqtt_port) == 0) {
             g_mqtt_ok = 1;
             PR_NOTICE("[codex] MQTT 模式已启用，HTTP 轮询已停用");
             lv_vendor_disp_lock();
@@ -507,12 +526,156 @@ void tuya_app_main(void)
         refresh_task, NULL, &thread_cfg
     );
 
-    /* 9. 主循环保持运行 — MQTT yield + 断线指数退避重连 */
+    /* 9. 初始化串口命令解析器 */
+    codex_serial_init(1);  /* UART1 = COM11 debug port */
+    codex_serial_respond("=== Codex Quota Monitor ===");
+    codex_serial_respond("Type HELP for available commands");
+
+    /* 10. 主循环保持运行 — MQTT yield + 断线指数退避重连 + 串口命令 */
     uint32_t mqtt_reconnect_at_ms  = 0;
     uint32_t mqtt_backoff_ms       = 1000;   /* 初始退避 1 s */
     #define MQTT_BACKOFF_MAX_MS    60000     /* 退避上限 60 s */
 
+    uint32_t diag_update_at_ms = 0;
+    #define DIAG_UPDATE_INTERVAL_MS  2000   /* 诊断页面刷新间隔 2 秒 */
+
     while (1) {
+        /* ── 串口命令处理 ─────────────────────────── */
+        serial_cmd_t cmd;
+        if (codex_serial_poll(&cmd) == 1) {
+            switch (cmd.type) {
+            case CMD_SET_WIFI:
+                /* SET WIFI <ssid> <password> */
+                if (cmd.arg1[0] == '\0') {
+                    codex_serial_respond("ERR: SET WIFI <ssid> <password>");
+                } else {
+                    strncpy(g_wifi_ssid, cmd.arg1, sizeof(g_wifi_ssid) - 1);
+                    g_wifi_ssid[sizeof(g_wifi_ssid) - 1] = '\0';
+                    if (cmd.arg2[0] != '\0') {
+                        strncpy(g_wifi_password, cmd.arg2, sizeof(g_wifi_password) - 1);
+                        g_wifi_password[sizeof(g_wifi_password) - 1] = '\0';
+                    }
+                    codex_serial_respond("OK: WiFi SSID=%s (restart to apply)", g_wifi_ssid);
+                    PR_NOTICE("[serial] WiFi config updated: ssid=%s", g_wifi_ssid);
+                }
+                break;
+
+            case CMD_SET_BRIDGE:
+                /* SET BRIDGE <host> <port> */
+                if (cmd.arg1[0] == '\0') {
+                    codex_serial_respond("ERR: SET BRIDGE <host> <port>");
+                } else {
+                    strncpy(g_bridge_host, cmd.arg1, sizeof(g_bridge_host) - 1);
+                    g_bridge_host[sizeof(g_bridge_host) - 1] = '\0';
+                    if (cmd.arg2[0] != '\0') {
+                        int port = atoi(cmd.arg2);
+                        if (port > 0 && port < 65536) {
+                            g_bridge_port = port;
+                        }
+                    }
+                    codex_serial_respond("OK: Bridge=%s:%d (restart to apply)",
+                                         g_bridge_host, g_bridge_port);
+                    PR_NOTICE("[serial] Bridge config updated: %s:%d",
+                              g_bridge_host, g_bridge_port);
+                }
+                break;
+
+            case CMD_SET_MQTT:
+                /* SET MQTT <host> <port> */
+                if (cmd.arg1[0] == '\0') {
+                    codex_serial_respond("ERR: SET MQTT <host> <port>");
+                } else {
+                    strncpy(g_mqtt_host, cmd.arg1, sizeof(g_mqtt_host) - 1);
+                    g_mqtt_host[sizeof(g_mqtt_host) - 1] = '\0';
+                    if (cmd.arg2[0] != '\0') {
+                        int port = atoi(cmd.arg2);
+                        if (port > 0 && port < 65536) {
+                            g_mqtt_port = port;
+                        }
+                    }
+                    codex_serial_respond("OK: MQTT=%s:%d (restart to apply)",
+                                         g_mqtt_host, g_mqtt_port);
+                    PR_NOTICE("[serial] MQTT config updated: %s:%d",
+                              g_mqtt_host, g_mqtt_port);
+                }
+                break;
+
+            case CMD_GET_CONFIG:
+                codex_serial_respond("=== Current Config ===");
+                codex_serial_respond("WiFi SSID: %s", g_wifi_ssid);
+                codex_serial_respond("Bridge: %s:%d%s",
+                                     g_bridge_host, g_bridge_port, g_bridge_path);
+                codex_serial_respond("MQTT: %s:%d", g_mqtt_host, g_mqtt_port);
+                codex_serial_respond("Device ID: t5ai-001");
+                codex_serial_respond("MQTT %s, WiFi %s",
+                                     codex_mqtt_is_connected() ? "connected" : "disconnected",
+                                     g_wifi_ok ? "connected" : "disconnected");
+                break;
+
+            case CMD_SAVE:
+                codex_serial_respond("TODO: NVS save not yet implemented");
+                PR_NOTICE("[serial] SAVE requested but NVS not implemented");
+                break;
+
+            case CMD_REBOOT:
+                codex_serial_respond("Rebooting in 1 second...");
+                tkl_system_sleep(1000);
+                tkl_system_reset();
+                break;
+
+            case CMD_UNKNOWN:
+            default:
+                codex_serial_respond("=== Available Commands ===");
+                codex_serial_respond("  SET WIFI <ssid> <password>");
+                codex_serial_respond("  SET BRIDGE <host> <port>");
+                codex_serial_respond("  SET MQTT <host> <port>");
+                codex_serial_respond("  GET CONFIG");
+                codex_serial_respond("  SAVE");
+                codex_serial_respond("  REBOOT");
+                codex_serial_respond("  HELP");
+                break;
+            }
+        }
+
+        /* ── 诊断页面更新 ─────────────────────────── */
+        {
+            uint32_t now = tkl_system_get_millisecond();
+            if (now >= diag_update_at_ms) {
+                diag_update_at_ms = now + DIAG_UPDATE_INTERVAL_MS;
+
+                codex_diag_info_t diag;
+                memset(&diag, 0, sizeof(diag));
+
+                /* WiFi */
+                strncpy(diag.wifi_ssid, g_wifi_ssid, sizeof(diag.wifi_ssid) - 1);
+                diag.wifi_connected = g_wifi_ok;
+                if (g_wifi_ok) {
+                    NW_IP_S ip = {0};
+                    tal_wifi_get_ip(WF_STATION, &ip);
+                    strncpy(diag.wifi_ip, ip.ip, sizeof(diag.wifi_ip) - 1);
+                    int8_t rssi = 0;
+                    tal_wifi_station_get_conn_ap_rssi(&rssi);
+                    diag.wifi_rssi = rssi;
+                }
+
+                /* MQTT */
+                strncpy(diag.mqtt_host, g_mqtt_host, sizeof(diag.mqtt_host) - 1);
+                diag.mqtt_port = g_mqtt_port;
+                diag.mqtt_connected = codex_mqtt_is_connected();
+
+                /* Bridge */
+                strncpy(diag.bridge_host, g_bridge_host, sizeof(diag.bridge_host) - 1);
+                diag.bridge_port = g_bridge_port;
+
+                /* System */
+                diag.uptime_seconds = tkl_system_get_millisecond() / 1000;
+                /* TODO: get real heap/PSRAM stats from tal_memory API */
+
+                lv_vendor_disp_lock();
+                codex_ui_update_diag(&diag);
+                lv_vendor_disp_unlock();
+            }
+        }
         if (g_mqtt_ok) {
             codex_mqtt_yield();
 

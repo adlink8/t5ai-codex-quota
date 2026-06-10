@@ -47,11 +47,15 @@ Make the T5AI-Board reliably display Codex quota status via MQTT + HTTP fallback
 
 ### Deferred
 
-- [ ] LCD Diagnostics page (needs hardware button input)
 - [ ] Quota history trends and UI arrows
 - [ ] Threshold alerting (warning/critical/recovery)
-- [ ] NVS/serial config (change WiFi without recompile)
 - [ ] OTA capability (version check + UG upgrade)
+
+### In Progress (feature/serial-config-diag-ui)
+
+- [ ] Serial config commands (SET WIFI/BRIDGE/MQTT via COM11)
+- [ ] LCD Diagnostics page (WiFi, MQTT, memory, uptime)
+- [ ] Multi-page touchscreen switching (main ↔ diag ↔ history)
 
 ### Out of Scope
 
@@ -74,7 +78,7 @@ device heartbeat ←─── codex/device/+/heartbeat                          
 
 ## Context
 
-- **Hardware:** Tuya T5AI-Board, BK7258 (ARM Cortex-M33F @480MHz), 16MB PSRAM, 8MB Flash, 480x320 RGB LCD
+- **Hardware:** Tuya T5AI-Board, BK7258 (ARM Cortex-M33F @480MHz), 16MB PSRAM, 8MB Flash, 480x320 RGB LCD **with touchscreen**
 - **SDK:** TuyaOpen (C/C++, CMake, Ninja, LVGL)
 - **Build env:** WSL Ubuntu-D at `/home/li/TuyaOpen`
 - **Flash:** tyutool_cli.exe, COM12 @ 921600 baud, debug COM11 @ 460800 baud

@@ -18,6 +18,10 @@
 
 #include <string.h>
 
+/* ── 外部运行时配置（来自 tuya_main.c）─────────────── */
+extern char g_mqtt_host[48];
+extern int  g_mqtt_port;
+
 /* ── 配置 ─────────────────────────────────────────── */
 #ifndef DEVICE_ID
 #define DEVICE_ID           "t5ai-001"
@@ -254,8 +258,8 @@ int codex_mqtt_reconnect(void)
     mqtt_client_config_t config = {
         .cacert = NULL,
         .cacert_len = 0,
-        .host = MQTT_HOST,
-        .port = MQTT_PORT,
+        .host = g_mqtt_host,
+        .port = g_mqtt_port,
         .keepalive = MQTT_KEEPALIVE,
         .timeout_ms = MQTT_TIMEOUT_MS,
         .clientid = MQTT_CLIENT_ID,
