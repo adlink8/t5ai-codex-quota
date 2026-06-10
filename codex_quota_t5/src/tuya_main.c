@@ -19,6 +19,7 @@
 #include "cJSON.h"
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* 板级 & LVGL 初始化 */
@@ -71,14 +72,14 @@ static uint32_t g_refresh_ms = REFRESH_OK_MS;
 static int g_wifi_ok = 0;
 static int g_mqtt_ok = 0;               /* MQTT 连接状态 */
 
-/* ── 运行时可配置副本（串口命令可修改）────────────── */
-static char g_wifi_ssid[32] = {0};
-static char g_wifi_password[64] = {0};
-static char g_bridge_host[48] = {0};
-static int  g_bridge_port = BRIDGE_PORT;
-static char g_bridge_path[32] = {0};
-static char g_mqtt_host[48] = {0};
-static int  g_mqtt_port = MQTT_PORT;
+/* ── 运行时可配置副本（串口命令可修改，extern 访问）── */
+char g_wifi_ssid[32] = {0};
+char g_wifi_password[64] = {0};
+char g_bridge_host[48] = {0};
+int  g_bridge_port = BRIDGE_PORT;
+char g_bridge_path[32] = {0};
+char g_mqtt_host[48] = {0};
+int  g_mqtt_port = MQTT_PORT;
 
 static const char *wifi_stat_name(WF_STATION_STAT_E stat)
 {

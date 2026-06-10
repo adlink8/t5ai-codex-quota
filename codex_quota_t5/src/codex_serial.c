@@ -222,7 +222,7 @@ void codex_serial_respond(const char *fmt, ...)
             buf[len++] = '\n';
             buf[len] = '\0';
         }
-        tkl_uart_write(g_uart_id, (const uint8_t *)buf, len);
+        tkl_uart_write(g_uart_id, (void *)buf, len);
     }
 }
 

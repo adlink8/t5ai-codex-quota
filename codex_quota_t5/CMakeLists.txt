@@ -7,6 +7,7 @@ set(APP_SRCS
     ${APP_PATH}/src/codex_http.c
     ${APP_PATH}/src/codex_ui.c
     ${APP_PATH}/src/codex_mqtt.c
+    ${APP_PATH}/src/codex_serial.c
 )
 
 add_library(${EXAMPLE_LIB} STATIC ${APP_SRCS})
