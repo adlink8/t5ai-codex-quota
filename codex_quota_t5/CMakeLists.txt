@@ -8,7 +8,7 @@ set(APP_SRCS
     ${APP_PATH}/src/codex_ui.c
     ${APP_PATH}/src/codex_mqtt.c
     ${APP_PATH}/src/codex_serial.c
-    ${CMAKE_SOURCE_DIR}/platform/T5AI/t5_os/ap/components/lvgl/src/font/lv_font_simsun_16_cjk.c
+    ${APP_PATH}/src/fonts/lv_font_cn_16.c
     # 触摸屏驱动（SDK 的 CONFIG_TP 默认未启用，直接编译进 app）
     ${APP_PATH}/src/drv_tp.c
     ${APP_PATH}/src/tp_driver.c
@@ -55,7 +55,6 @@ target_compile_definitions(${EXAMPLE_LIB} PUBLIC
     LV_FONT_MONTSERRAT_24=1
     LV_FONT_MONTSERRAT_32=1
     LV_FONT_MONTSERRAT_34=1
-    LV_FONT_SIMSUN_16_CJK=1
     LV_DRAW_BUF_PARTS=10
     DISPLAY_NAME="display"
 )

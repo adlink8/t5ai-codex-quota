@@ -15,6 +15,8 @@
 #include <stdio.h>
 #include <string.h>
 
+LV_FONT_DECLARE(lv_font_cn_16);
+
 /* ── 颜色定义 ─────────────────────────────────────── */
 #define COLOR_BG        lv_color_hex(0x05070A)
 #define COLOR_PANEL     lv_color_hex(0x111821)
@@ -46,6 +48,7 @@ static lv_obj_t *g_tile_diag = NULL;
 /* Page 0: Quota */
 static lv_obj_t *g_title;
 static lv_obj_t *g_plan_badge;
+static lv_obj_t *g_status_bar;
 static lv_obj_t *g_status_label;
 static lv_obj_t *g_live_dot;
 static quota_card_t g_primary;
@@ -110,7 +113,7 @@ static const lv_font_t *font_for_percent(lv_coord_t screen_w)
 
 static const lv_font_t *font_for_cjk_text(void)
 {
-    return &lv_font_simsun_16_cjk;
+    return &lv_font_cn_16;
 }
 
 static int is_ascii_text(const char *text)
@@ -414,10 +417,12 @@ void codex_ui_create(void)
     lv_coord_t sh = disp != NULL ? lv_disp_get_ver_res(disp) : LV_VER_RES;
     lv_coord_t margin = 10;
     lv_coord_t header_h = 44;
-    lv_coord_t status_h = 28;
+    lv_coord_t status_h = 34;
+    lv_coord_t dots_h = 16;
     lv_coord_t gap = 10;
     lv_coord_t content_y = header_h + margin;
-    lv_coord_t content_h = sh - header_h - status_h - (margin * 3) - 20; /* 20 for dots */
+    lv_coord_t content_h = sh - header_h - status_h - dots_h - (margin * 3);
+    lv_coord_t diag_content_h = sh - header_h - dots_h - (margin * 2);
 
     /* ── Tileview ────────────────────────────────── */
     g_tileview = lv_tileview_create(scr);
@@ -447,21 +452,32 @@ void codex_ui_create(void)
     create_quota_card(&g_primary, g_tile_quota, margin, content_y, card_w, card_h, "Primary", sw);
     create_quota_card(&g_secondary, g_tile_quota, margin + card_w + gap, content_y, card_w, card_h, "Secondary", sw);
 
-    g_live_dot = lv_obj_create(g_tile_quota);
+    g_status_bar = lv_obj_create(g_tile_quota);
+    lv_obj_set_size(g_status_bar, sw - margin * 2, status_h);
+    lv_obj_align(g_status_bar, LV_ALIGN_BOTTOM_MID, 0, -dots_h - 2);
+    lv_obj_set_style_bg_color(g_status_bar, COLOR_PANEL_2, 0);
+    lv_obj_set_style_bg_opa(g_status_bar, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_status_bar, 1, 0);
+    lv_obj_set_style_border_color(g_status_bar, lv_color_hex(0x1D2A3A), 0);
+    lv_obj_set_style_radius(g_status_bar, 8, 0);
+    lv_obj_set_style_pad_all(g_status_bar, 0, 0);
+    lv_obj_clear_flag(g_status_bar, LV_OBJ_FLAG_SCROLLABLE);
+
+    g_live_dot = lv_obj_create(g_status_bar);
     lv_obj_set_size(g_live_dot, 8, 8);
     lv_obj_set_style_radius(g_live_dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(g_live_dot, COLOR_YELLOW, 0);
     lv_obj_set_style_bg_opa(g_live_dot, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(g_live_dot, 0, 0);
-    lv_obj_align(g_live_dot, LV_ALIGN_BOTTOM_LEFT, margin, -28);
+    lv_obj_align(g_live_dot, LV_ALIGN_LEFT_MID, 10, 0);
 
-    g_status_label = lv_label_create(g_tile_quota);
+    g_status_label = lv_label_create(g_status_bar);
     lv_label_set_text(g_status_label, "Starting...");
     lv_obj_set_style_text_font(g_status_label, font_for_cjk_text(), 0);
     lv_obj_set_style_text_color(g_status_label, COLOR_DIM, 0);
-    lv_obj_set_width(g_status_label, sw - margin * 2 - 20);
+    lv_obj_set_width(g_status_label, sw - margin * 2 - 32);
     lv_label_set_long_mode(g_status_label, LV_LABEL_LONG_DOT);
-    lv_obj_align(g_status_label, LV_ALIGN_BOTTOM_LEFT, margin + 14, -25);
+    lv_obj_align(g_status_label, LV_ALIGN_LEFT_MID, 24, 0);
 
     /* ── Page 1: Diagnostics ─────────────────────── */
     g_tile_diag = lv_tileview_add_tile(g_tileview, 1, 0, LV_DIR_LEFT);
@@ -474,7 +490,7 @@ void codex_ui_create(void)
 
     /* WiFi section */
     lv_coord_t section_w = (sw - margin * 2 - gap) / 2;
-    lv_coord_t section_h = (content_h - gap) / 2;
+    lv_coord_t section_h = (diag_content_h - gap) / 2;
 
     lv_obj_t *wifi_panel = create_diag_section(g_tile_diag, "WiFi",
                                                 margin, content_y,

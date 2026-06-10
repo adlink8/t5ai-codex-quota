@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CMAKE = ROOT / "codex_quota_t5" / "CMakeLists.txt"
 UI = ROOT / "codex_quota_t5" / "src" / "codex_ui.c"
+CN_FONT = ROOT / "codex_quota_t5" / "src" / "fonts" / "lv_font_cn_16.c"
 
 
 def read(path: Path) -> str:
@@ -32,16 +33,22 @@ def function_body(source: str, name: str) -> str:
 
 
 class UiCjkFontTest(unittest.TestCase):
-    def test_cmake_links_simsun_cjk_font_into_app(self):
+    def test_cmake_links_project_cn_font_into_app(self):
         cmake = read(CMAKE)
-        self.assertIn("LV_FONT_SIMSUN_16_CJK=1", cmake)
-        self.assertIn("lv_font_simsun_16_cjk.c", cmake)
-        self.assertRegex(cmake, r"set\(APP_SRCS[\s\S]*lv_font_simsun_16_cjk\.c")
+        self.assertIn("src/fonts/lv_font_cn_16.c", cmake)
+        self.assertRegex(cmake, r"set\(APP_SRCS[\s\S]*lv_font_cn_16\.c")
+        self.assertNotIn("LV_FONT_SIMSUN_16_CJK", cmake)
+
+    def test_project_cn_font_covers_hotspot_name(self):
+        font = read(CN_FONT)
+        self.assertIn("const lv_font_t lv_font_cn_16", font)
+        for char in "一连就爆炸":
+            self.assertIn(char, font)
 
     def test_ui_declares_cjk_font_helper(self):
         ui = read(UI)
         body = function_body(ui, "font_for_cjk_text")
-        self.assertIn("&lv_font_simsun_16_cjk", body)
+        self.assertIn("&lv_font_cn_16", body)
 
     def test_quota_card_text_uses_cjk_font(self):
         ui = read(UI)
@@ -65,11 +72,21 @@ class UiCjkFontTest(unittest.TestCase):
         self.assertIn("lv_obj_set_style_text_font(val, font_for_cjk_text(), 0)", item)
         self.assertIn("lv_label_set_long_mode(val, LV_LABEL_LONG_DOT)", item)
 
-    def test_status_bar_uses_cjk_font_and_width_limit(self):
+    def test_status_bar_uses_cjk_font_and_dedicated_container(self):
         ui = read(UI)
         create = function_body(ui, "codex_ui_create")
+        self.assertIn("g_status_bar = lv_obj_create(g_tile_quota)", create)
+        self.assertIn("g_status_label = lv_label_create(g_status_bar)", create)
+        self.assertIn("g_live_dot = lv_obj_create(g_status_bar)", create)
         self.assertIn("lv_obj_set_style_text_font(g_status_label, font_for_cjk_text(), 0)", create)
         self.assertIn("lv_label_set_long_mode(g_status_label, LV_LABEL_LONG_DOT)", create)
+
+    def test_diagnostics_layout_keeps_full_panel_height(self):
+        ui = read(UI)
+        create = function_body(ui, "codex_ui_create")
+        self.assertIn("diag_content_h = sh - header_h - dots_h - (margin * 2)", create)
+        self.assertIn("section_h = (diag_content_h - gap) / 2", create)
+        self.assertNotIn("section_h = (content_h - gap) / 2", create)
 
     def test_runtime_chinese_labels_are_not_forced_to_ascii(self):
         ui = read(UI)
