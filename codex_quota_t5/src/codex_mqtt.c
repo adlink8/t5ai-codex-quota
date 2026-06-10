@@ -4,6 +4,9 @@
  *
  * 使用 TuyaOpen libmqtt API (mqtt_client_interface.h)。
  * 连接成功后自动订阅，收到消息后解析 JSON 并更新 UI。
+ *
+ * 重要：on_message 回调可能在 MQTT SDK 内部线程运行，
+ * 不直接调用 LVGL，而是通过消息队列延迟到主循环处理。
  */
 
 #include "codex_mqtt.h"
@@ -36,9 +39,15 @@ extern int  g_mqtt_port;
 static void *g_mqtt_client = NULL;
 static int g_mqtt_connected = 0;
 
+/* ── 消息队列（回调 → 主循环）────────────────────── */
+#define MQTT_MSG_BUF_SIZE 2048
+static char g_pending_json[MQTT_MSG_BUF_SIZE];
+static volatile int g_new_message = 0;  /* 原子标志 */
+
 /* ── 诊断计数 ────────────────────────────────────── */
 static int g_disc_cb_count = 0;
 static int g_conn_cb_count  = 0;
+static int g_msg_rx_count   = 0;  /* 收到的 MQTT 消息总数 */
 static uint32_t g_last_disc_ms = 0;  /* 上次断连回调时间戳 */
 
 /* ── 回调函数 ─────────────────────────────────────── */
@@ -82,8 +91,7 @@ static void on_disconnected(void *client, void *userdata)
     if (g_last_disc_ms != 0 && (now_ms - g_last_disc_ms) < 2000) {
         PR_NOTICE("[mqtt] disc_cb #%d DEBOUNCE (dt=%u ms, conn was %d)",
                   g_disc_cb_count,
-                  (unsigned)(now_ms - g_last_disc_ms),
-                  g_mqtt_connected);
+                  (unsigned)(now_ms - g_last_disc_ms), g_mqtt_connected);
         /* 仍然标记断连，但不重复执行逻辑 */
         g_mqtt_connected = 0;
         g_last_disc_ms = now_ms;
@@ -99,14 +107,24 @@ static void on_disconnected(void *client, void *userdata)
      * 由主循环的 codex_mqtt_reconnect() 负责完整销毁和重建。 */
 }
 
+/**
+ * MQTT 消息回调 — 仅复制数据到共享缓冲区，不调用 LVGL
+ *
+ * 重要：此回调可能在 MQTT SDK 内部线程运行（非主线程），
+ * 不能直接调用 LVGL 函数，否则会导致：
+ *   1. 线程安全问题（LVGL 不是线程安全的）
+ *   2. 栈溢出（MQTT 任务栈通常只有 2-4KB）
+ */
 static void on_message(void *client, uint16_t msgid,
                        const mqtt_client_message_t *msg, void *userdata)
 {
     (void)client;
     (void)userdata;
 
-    PR_NOTICE("[mqtt] 收到消息: topic=%s len=%u msgid=%u",
-              msg->topic, (unsigned)msg->length, msgid);
+    g_msg_rx_count++;
+
+    PR_NOTICE("[mqtt] 收到消息 #%d: topic=%s len=%u msgid=%u",
+              g_msg_rx_count, msg->topic, (unsigned)msg->length, msgid);
 
     /* 确保 payload 是有效的 JSON 字符串 */
     if (msg->payload == NULL || msg->length == 0) {
@@ -114,25 +132,19 @@ static void on_message(void *client, uint16_t msgid,
         return;
     }
 
-    /* 复制到本地缓冲区确保 null-terminated */
-    char json_buf[2048];
-    size_t copy_len = msg->length < sizeof(json_buf) - 1 ? msg->length : sizeof(json_buf) - 1;
-    memcpy(json_buf, msg->payload, copy_len);
-    json_buf[copy_len] = '\0';
-
-    codex_quota_t quota;
-    if (codex_parse_json(json_buf, &quota) == 0) {
-        PR_NOTICE("[mqtt] 解析成功: %s | 主剩余 %.1f%% | 副剩余 %.1f%%",
-                  quota.plan_type,
-                  quota.primary.remaining,
-                  quota.has_secondary ? quota.secondary.remaining : 0.0);
-
-        lv_vendor_disp_lock();
-        codex_ui_update(&quota);
-        lv_vendor_disp_unlock();
-    } else {
-        PR_ERR("[mqtt] JSON 解析失败");
+    /* 安全检查：payload 不能超过缓冲区大小 */
+    if (msg->length >= MQTT_MSG_BUF_SIZE) {
+        PR_ERR("[mqtt] payload 过大: %u >= %u, 丢弃消息",
+               (unsigned)msg->length, (unsigned)MQTT_MSG_BUF_SIZE);
+        return;
     }
+
+    /* 仅复制数据到共享缓冲区（栈上操作很小） */
+    memcpy(g_pending_json, msg->payload, msg->length);
+    g_pending_json[msg->length] = '\0';
+    g_new_message = 1;  /* 通知主循环有新消息 */
+
+    PR_NOTICE("[mqtt] 消息已缓存，等待主循环处理 (len=%u)", (unsigned)msg->length);
 }
 
 static void on_subscribed(void *client, uint16_t msgid, void *userdata)
@@ -334,4 +346,38 @@ void codex_mqtt_disconnect(void)
 int codex_mqtt_is_connected(void)
 {
     return g_mqtt_connected;
+}
+
+int codex_mqtt_has_pending_message(void)
+{
+    return g_new_message;
+}
+
+int codex_mqtt_get_msg_count(void)
+{
+    return g_msg_rx_count;
+}
+
+int codex_mqtt_process_pending_message(codex_quota_t *quota)
+{
+    if (!g_new_message) {
+        return 0;  /* 无待处理消息 */
+    }
+
+    /* 清除标志（先清除再处理，避免竞争） */
+    g_new_message = 0;
+
+    PR_NOTICE("[mqtt] 主循环处理缓存消息 (len=%u)",
+              (unsigned)strlen(g_pending_json));
+
+    if (codex_parse_json(g_pending_json, quota) == 0) {
+        PR_NOTICE("[mqtt] 解析成功: %s | 主剩余 %.1f%% | 副剩余 %.1f%%",
+                  quota->plan_type,
+                  quota->primary.remaining,
+                  quota->has_secondary ? quota->secondary.remaining : 0.0);
+        return 1;  /* 解析成功 */
+    } else {
+        PR_ERR("[mqtt] JSON 解析失败");
+        return -1;  /* 解析失败 */
+    }
 }

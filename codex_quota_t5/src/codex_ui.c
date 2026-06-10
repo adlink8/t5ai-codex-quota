@@ -108,9 +108,9 @@ static const lv_font_t *font_for_percent(lv_coord_t screen_w)
     return screen_w >= 440 ? &lv_font_montserrat_34 : &lv_font_montserrat_24;
 }
 
-static const lv_font_t *font_for_title(lv_coord_t screen_w)
+static const lv_font_t *font_for_cjk_text(void)
 {
-    return screen_w >= 440 ? &lv_font_montserrat_20 : &lv_font_montserrat_16;
+    return &lv_font_simsun_16_cjk;
 }
 
 static int is_ascii_text(const char *text)
@@ -136,29 +136,6 @@ static void append_unit(char *out, size_t out_size, size_t *used,
     if (written > 0) {
         *used += (size_t)written;
         if (*used >= out_size) *used = out_size - 1;
-    }
-}
-
-static void format_label_ascii(const char *label, const char *fallback,
-                               char *out, size_t out_size)
-{
-    int value = 0;
-
-    if (label != NULL && sscanf(label, "%d", &value) == 1 && value > 0) {
-        if (strstr(label, "小时") != NULL) {
-            snprintf(out, out_size, "%dh", value);
-            return;
-        }
-        if (strstr(label, "天") != NULL) {
-            snprintf(out, out_size, "%dd", value);
-            return;
-        }
-    }
-
-    if (is_ascii_text(label)) {
-        snprintf(out, out_size, "%s", label);
-    } else {
-        snprintf(out, out_size, "%s", fallback);
     }
 }
 
@@ -266,7 +243,7 @@ static void create_quota_card(quota_card_t *card, lv_obj_t *parent,
 
     card->title = lv_label_create(card->panel);
     lv_label_set_text(card->title, title);
-    lv_obj_set_style_text_font(card->title, font_for_title(screen_w), 0);
+    lv_obj_set_style_text_font(card->title, font_for_cjk_text(), 0);
     lv_obj_set_style_text_color(card->title, COLOR_TEXT, 0);
     lv_obj_align(card->title, LV_ALIGN_TOP_MID, 0, 10);
 
@@ -292,13 +269,13 @@ static void create_quota_card(quota_card_t *card, lv_obj_t *parent,
 
     card->used = lv_label_create(card->panel);
     lv_label_set_text(card->used, "Used --%");
-    lv_obj_set_style_text_font(card->used, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(card->used, font_for_cjk_text(), 0);
     lv_obj_set_style_text_color(card->used, COLOR_DIM, 0);
     lv_obj_align(card->used, LV_ALIGN_BOTTOM_MID, 0, -28);
 
     card->reset = lv_label_create(card->panel);
     lv_label_set_text(card->reset, "Reset --");
-    lv_obj_set_style_text_font(card->reset, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(card->reset, font_for_cjk_text(), 0);
     lv_obj_set_style_text_color(card->reset, COLOR_DIM, 0);
     lv_obj_align(card->reset, LV_ALIGN_BOTTOM_MID, 0, -10);
 }
@@ -318,8 +295,8 @@ static void update_card(quota_card_t *card, const char *fallback_title,
     lv_label_set_text(card->percent, buf);
     lv_obj_set_style_text_color(card->percent, color, 0);
 
-    format_label_ascii(window->label, fallback_title, ascii, sizeof(ascii));
-    lv_label_set_text(card->title, ascii);
+    lv_label_set_text(card->title,
+                      window->label[0] ? window->label : fallback_title);
 
     snprintf(buf, sizeof(buf), "Used %.0f%%", window->used);
     lv_label_set_text(card->used, buf);
@@ -348,7 +325,7 @@ static lv_obj_t *create_diag_section(lv_obj_t *parent, const char *title,
 
     lv_obj_t *lbl = lv_label_create(panel);
     lv_label_set_text(lbl, title);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(lbl, font_for_cjk_text(), 0);
     lv_obj_set_style_text_color(lbl, COLOR_CYAN, 0);
     lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 0, 0);
 
@@ -360,14 +337,16 @@ static lv_obj_t *create_diag_item(lv_obj_t *parent, const char *label,
 {
     lv_obj_t *lbl = lv_label_create(parent);
     lv_label_set_text(lbl, label);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl, font_for_cjk_text(), 0);
     lv_obj_set_style_text_color(lbl, COLOR_DIM, 0);
     lv_obj_align_to(lbl, align_obj, LV_ALIGN_TOP_LEFT, 0, y_offset);
 
     lv_obj_t *val = lv_label_create(parent);
     lv_label_set_text(val, "--");
-    lv_obj_set_style_text_font(val, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(val, font_for_cjk_text(), 0);
     lv_obj_set_style_text_color(val, COLOR_TEXT, 0);
+    lv_obj_set_width(val, lv_pct(58));
+    lv_label_set_long_mode(val, LV_LABEL_LONG_DOT);
     lv_obj_align_to(val, lbl, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
 
     return val;
@@ -478,8 +457,10 @@ void codex_ui_create(void)
 
     g_status_label = lv_label_create(g_tile_quota);
     lv_label_set_text(g_status_label, "Starting...");
-    lv_obj_set_style_text_font(g_status_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(g_status_label, font_for_cjk_text(), 0);
     lv_obj_set_style_text_color(g_status_label, COLOR_DIM, 0);
+    lv_obj_set_width(g_status_label, sw - margin * 2 - 20);
+    lv_label_set_long_mode(g_status_label, LV_LABEL_LONG_DOT);
     lv_obj_align(g_status_label, LV_ALIGN_BOTTOM_LEFT, margin + 14, -25);
 
     /* ── Page 1: Diagnostics ─────────────────────── */

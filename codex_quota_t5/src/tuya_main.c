@@ -26,6 +26,13 @@
 #include "board_com_api.h"
 #include "lv_vendor.h"
 
+#if ENABLE_TP
+/* 前向声明触摸驱动函数，避免包含 drv_tp.h（其内部 beken_mutex_t 类型
+ * 需要额外 Beken SDK 头文件，会引入不必要的依赖） */
+extern int drv_tp_open(int hor_size, int ver_size, int tp_mirror);
+#define TP_MIRROR_NONE  0
+#endif
+
 #include "codex_http.h"
 #include "codex_ui.h"
 #include "codex_mqtt.h"
@@ -451,6 +458,23 @@ void tuya_app_main(void)
     /* 2. 初始化 LVGL 显示 */
     lv_vendor_init(DISPLAY_NAME);
 
+    /* 2.5 初始化触摸屏驱动 */
+#if ENABLE_TP
+    {
+        lv_disp_t *disp = lv_disp_get_default();
+        lv_coord_t tp_w = disp ? lv_disp_get_hor_res(disp) : 480;
+        lv_coord_t tp_h = disp ? lv_disp_get_ver_res(disp) : 320;
+        /* 如果显示是竖屏但会被 UI 旋转为横屏，交换宽高 */
+        if (tp_w < tp_h) {
+            lv_coord_t tmp = tp_w;
+            tp_w = tp_h;
+            tp_h = tmp;
+        }
+        int tp_ret = drv_tp_open(tp_w, tp_h, TP_MIRROR_NONE);
+        PR_NOTICE("[codex] drv_tp_open(%d, %d) ret=%d", (int)tp_w, (int)tp_h, tp_ret);
+    }
+#endif
+
     /* 3. 启动 LVGL 渲染循环 (priority=5, stack=8KB)
      *    必须先启动 LVGL 任务，让显示驱动就绪后，才能创建 UI 对象 */
     lv_vendor_start(5, 1024 * 8);
@@ -663,6 +687,7 @@ void tuya_app_main(void)
                 strncpy(diag.mqtt_host, g_mqtt_host, sizeof(diag.mqtt_host) - 1);
                 diag.mqtt_port = g_mqtt_port;
                 diag.mqtt_connected = codex_mqtt_is_connected();
+                diag.mqtt_msg_count = codex_mqtt_get_msg_count();
 
                 /* Bridge */
                 strncpy(diag.bridge_host, g_bridge_host, sizeof(diag.bridge_host) - 1);
@@ -679,6 +704,21 @@ void tuya_app_main(void)
         }
         if (g_mqtt_ok) {
             codex_mqtt_yield();
+
+            /* 处理待处理的 MQTT 消息（在主循环中安全调用 LVGL） */
+            {
+                codex_quota_t mqtt_quota;
+                int result = codex_mqtt_process_pending_message(&mqtt_quota);
+                if (result == 1) {
+                    /* 解析成功，更新 UI */
+                    lv_vendor_disp_lock();
+                    codex_ui_update(&mqtt_quota);
+                    lv_vendor_disp_unlock();
+                    g_quota = mqtt_quota;
+                } else if (result == -1) {
+                    PR_ERR("[codex] MQTT 消息解析失败");
+                }
+            }
 
             /* yield 可能检测到断连 → on_disconnected 已置 g_mqtt_connected=0 */
             if (!codex_mqtt_is_connected()) {

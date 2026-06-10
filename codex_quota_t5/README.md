@@ -2,7 +2,7 @@
 
 将小米手环 8 Pro 的 Codex 额度监控应用移植到涂鸦 T5AI-Board。
 通过 WiFi 直连 PC 桥接服务器，在 480x320 LCD 屏幕上显示额度环形进度条。
-支持 MQTT 推送 + HTTP 回退双通道，断线自动重连。
+支持 MQTT 推送 + HTTP 回退双通道，断线自动重连，支持触摸屏操作。
 
 ## 架构
 
@@ -22,18 +22,51 @@ T5AI-Board ←──MQTT subscribe─── Mosquitto Broker ←──MQTT publi
 ```
 codex_quota_t5/
 ├── src/
-│   ├── tuya_main.c      # 主程序：WiFi + MQTT 连接 + 指数退避重连 + 任务调度
-│   ├── codex_http.c     # HTTP 请求 + cJSON 解析 (MQTT 回退通道)
-│   ├── codex_http.h     # 数据结构定义
-│   ├── codex_mqtt.c     # MQTT 客户端：连接/订阅/回调/防抖/重连
-│   ├── codex_mqtt.h     # MQTT 接口头文件
-│   ├── codex_ui.c       # LVGL UI：环形进度条 + 颜色分级
-│   └── codex_ui.h       # UI 接口
-├── CMakeLists.txt       # 构建配置 (源文件列表 + 编译选项，不含 IP/密码)
-├── app_default.config   # 编译选项默认值（WiFi、Bridge、MQTT，安全空值）
-├── Kconfig              # 可配置项（WiFi SSID、服务器地址、MQTT 配置）— 唯一配置源
-└── README.md            # 本文件
+│   ├── tuya_main.c           # 主程序：WiFi + MQTT 连接 + 指数退避重连 + 任务调度
+│   ├── codex_http.c          # HTTP 请求 + cJSON 解析 (MQTT 回退通道)
+│   ├── codex_http.h          # 数据结构定义
+│   ├── codex_mqtt.c          # MQTT 客户端：连接/订阅/回调/防抖/重连
+│   ├── codex_mqtt.h          # MQTT 接口头文件
+│   ├── codex_serial.c        # 串口通信
+│   ├── codex_serial.h        # 串口接口
+│   ├── codex_ui.c            # LVGL UI：环形进度条 + 颜色分级 + 触摸交互
+│   ├── codex_ui.h            # UI 接口
+│   ├── drv_tp.c              # 触摸驱动 (Beken SDK，直接编译进 app)
+│   ├── tp_driver.c           # 触摸底层驱动
+│   ├── bk_queue.c            # Beken 队列实现
+│   └── sim_i2c_driver_v2.c   # 模拟 I2C 驱动 v2（TP 驱动依赖）
+├── CMakeLists.txt            # 构建配置 (源文件列表 + TP 驱动 include + 编译选项)
+├── app_default.config        # 编译选项默认值（WiFi、Bridge、MQTT、TP，安全空值）
+├── Kconfig                   # 可配置项（WiFi SSID、服务器地址、MQTT 配置）— 唯一配置源
+└── README.md                 # 本文件
 ```
+
+## SDK 修改说明
+
+本项目对 TuyaOpen SDK 有两处修改，随项目一同提交：
+
+### 1. LVGL 字体配置 (`src/liblvgl/v8/conf/lv_conf.h`)
+
+启用了项目 UI 所需的 Montserrat 字体：14、16、20、24、32、34 号。添加了 `LV_DRAW_BUF_PARTS=10` 以支持多缓冲区渲染。
+
+### 2. MQTT 客户端修复 (`src/libmqtt/src/mqtt_client_wrapper.c`)
+
+- **空指针防护**：`mqtt_client_connect` 中对 `clientid`、`username`、`password` 增加 NULL 检查，避免 NULL 指针调用 `strlen` 导致崩溃。
+- **Yield 超时优化**：`mqtt_client_yield` 中将 `MQTT_ProcessLoop` 超时从 `config.timeout_ms`（默认 5000ms）改为 50ms，防止长时间阻塞主循环、LVGL 任务和看门狗。
+- **Socket 状态检查**：yield 前检查传输层 socket fd，若已关闭则直接返回超时，避免在已断开的连接上无限循环 `MQTTRecvFailed`/`MQTTSendFailed` 错误。
+
+## 触摸屏支持
+
+通过 `app_default.config` 启用 `CONFIG_ENABLE_LVGL_TP=y`，激活 LVGL v8 输入设备端口层（`lv_port_indev.c`）中的触摸代码路径。
+
+触摸驱动初始化流程：
+
+1. `lv_vendor_init()` → `lv_port_indev_init()` → 注册 touchpad 输入设备
+2. `drv_tp_open()` 在 `tuya_main.c` 中初始化触摸屏硬件（I2C + 中断）
+3. `touchpad_read()` 回调通过 TDL API `tdl_tp_dev_read()` 读取触摸坐标
+
+> 注：`drv_tp.c`、`tp_driver.c`、`bk_queue.c`、`sim_i2c_driver_v2.c` 从 Beken SDK 复制到 `src/` 目录直接编译，
+> 因为 SDK 的 `sdkconfig.cmake` 不会自动启用 TP 驱动编译。CMakeLists.txt 中已添加必要的 include 路径和 warning 抑制。
 
 ## 编译烧录步骤
 
@@ -57,13 +90,13 @@ python ../../tos.py build
 /home/li/TuyaOpen/apps/codex_quota/dist/codex_quota_1.0.0/
 ```
 
-**⚠️ 烧录时必须选择 QIO 固件：**
+**烧录时必须选择 QIO 固件：**
 
 | 文件 | 格式 | 大小 | 用途 |
 |------|------|------|------|
-| `codex_quota_QIO_1.0.0.bin` | QSPI 完整镜像 | ~2.6 MB | **✅ 唯一正确的烧录文件**，含 bootloader + 分区表 + 应用 |
-| `codex_quota_UA_1.0.0.bin` | UART 升级格式 | ~2.4 MB | ❌ 烧录后板子黑屏无法启动 |
-| `codex_quota_UG_1.0.0.bin` | OTA 升级格式 | ~1.3 MB | ❌ 仅用于在线 OTA 升级 |
+| `codex_quota_QIO_1.0.0.bin` | QSPI 完整镜像 | ~2.6 MB | **唯一正确的烧录文件**，含 bootloader + 分区表 + 应用 |
+| `codex_quota_UA_1.0.0.bin` | UART 升级格式 | ~2.4 MB | 烧录后板子黑屏无法启动 |
+| `codex_quota_UG_1.0.0.bin` | OTA 升级格式 | ~1.3 MB | 仅用于在线 OTA 升级 |
 
 ### 1. 把项目复制到 TuyaOpen 目录
 
@@ -156,5 +189,15 @@ python bridge_server\codex_bridge_server.py --port 5678
 - 右侧环：副窗口（周额度）剩余百分比
 - 颜色分级：绿色 >50%、黄色 >20%、红色 ≤20%
 - 底部状态栏：上次更新时间 / 离线提示 / MQTT 连接状态
+- 支持触摸屏交互
 - HTTP 失败退避：60s → 120s → 240s → 上限 300s
 - MQTT 断连重连退避：1s → 2s → ... → 上限 60s
+
+## 已知问题与修复记录
+
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| MQTT 数据到达后白屏崩溃 | `MQTT_ProcessLoop` 超时 5000ms 阻塞主循环，LVGL 和看门狗饿死 | Yield 超时改为 50ms |
+| 触摸屏无反应 | `CONFIG_ENABLE_LVGL_TP` 未启用，触摸代码被 `#ifdef` 编译掉 | `app_default.config` 中启用 `CONFIG_ENABLE_LVGL_TP=y` |
+| MQTT 连接空指针崩溃 | `clientid`/`username`/`password` 为 NULL 时调用 `strlen` | 增加 NULL 检查 |
+| TP 驱动链接失败 | Beken SDK 的 `sdkconfig.cmake` 未启用 `CONFIG_TP`，`libdriver.a` 不含 TP 符号 | 将 TP 驱动源文件复制到 `src/` 直接编译 |
